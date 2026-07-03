@@ -182,7 +182,19 @@ with tab2:
                  use_container_width=True, hide_index=True)
 
     st.markdown("**Tipo de cargo reembolsado**")
-    refunds_m["tipo_cargo"] = refunds_m["Description"].str.extract(r"^([A-Za-z ]+)")[0].str.strip().fillna("Otro")
+    def _clasificar_cargo(desc):
+        if pd.isna(desc):
+            return "Otro"
+        d = str(desc).strip()
+        if d.startswith("Invoice"):
+            return "Invoice"
+        if d.startswith("Subscription creation"):
+            return "Subscription creation"
+        if d.startswith("Subscription update"):
+            return "Subscription update"
+        return d if d else "Otro"
+
+    refunds_m["tipo_cargo"] = refunds_m["Description"].apply(_clasificar_cargo)
     tipo = refunds_m.groupby("tipo_cargo").agg(casos=("id", "count"), monto=("Amount Refunded", "sum")).reset_index().sort_values("monto", ascending=False)
     fig = px.bar(tipo, x="tipo_cargo", y="monto", text="casos", color_discrete_sequence=[TEAL])
     fig.update_traces(texttemplate="%{text} casos", textposition="outside")
@@ -190,10 +202,14 @@ with tab2:
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Fuente: prefijo de `Description` (Invoice / Subscription creation / Subscription update).")
 
-    st.markdown("**Top clientes con más reembolsos en el mes**")
-    top = refunds_m.groupby("Customer Email").agg(casos=("id", "count"), monto=("Amount Refunded", "sum")).reset_index().sort_values("casos", ascending=False).head(10)
-    st.dataframe(top.rename(columns={"Customer Email": "Cliente", "casos": "Casos", "monto": "Monto USD"}),
-                 use_container_width=True, hide_index=True)
+    st.markdown("**Clientes con más de 1 reembolso en el mes**")
+    top_all = refunds_m.groupby("Customer Email").agg(casos=("id", "count"), monto=("Amount Refunded", "sum")).reset_index()
+    top = top_all[top_all["casos"] > 1].sort_values("casos", ascending=False)
+    if top.empty:
+        st.caption("Ningún cliente tuvo más de 1 reembolso este mes — buena señal, no hay reincidencia.")
+    else:
+        st.dataframe(top.rename(columns={"Customer Email": "Cliente", "casos": "Casos", "monto": "Monto USD"}),
+                     use_container_width=True, hide_index=True)
 
 # ===================== TAB 3: DISPUTAS =====================
 with tab3:
@@ -233,22 +249,27 @@ with tab3:
 
 # ===================== TAB 4: PENDIENTES URGENTES =====================
 with tab4:
-    st.subheader("🚨 Disputas que requieren acción")
-    pendientes = df[df["Dispute Status"].isin(["needs_response", "under_review"])].copy()
-    pendientes = pendientes.sort_values("Dispute Evidence Due (UTC)")
-    hoy = pd.Timestamp.now().normalize()
-    pendientes["dias_restantes"] = (pendientes["Dispute Evidence Due (UTC)"] - hoy).dt.days
+    st.subheader("🚨 Disputas que requieren acción de nuestro lado")
+    st.caption("`needs_response` = todavía no enviamos evidencia (acción nuestra, con fecha límite real). "
+               "`under_review` = ya enviamos evidencia, esperando resolución del banco emisor (no es una tarea pendiente nuestra).")
 
-    vencidas = pendientes[pendientes["dias_restantes"] < 0]
-    urgentes = pendientes[(pendientes["dias_restantes"] >= 0) & (pendientes["dias_restantes"] <= 7)]
+    hoy = pd.Timestamp.now().normalize()
+
+    # --- Acción requerida: solo needs_response ---
+    accion = df[df["Dispute Status"] == "needs_response"].copy()
+    accion["dias_restantes"] = (accion["Dispute Evidence Due (UTC)"] - hoy).dt.days
+    accion = accion.sort_values("dias_restantes")
+
+    vencidas = accion[accion["dias_restantes"] < 0]
+    urgentes = accion[(accion["dias_restantes"] >= 0) & (accion["dias_restantes"] <= 7)]
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Total pendientes (todas las fechas)", len(pendientes))
+    m1.metric("Pendientes de enviar evidencia", len(accion))
     m2.metric("⏰ Vencen en ≤ 7 días", len(urgentes))
-    m3.metric("🔴 Ya vencidas sin respuesta", len(vencidas))
+    m3.metric("🔴 Vencidas sin evidencia enviada", len(vencidas))
 
     if len(vencidas):
-        st.error(f"{len(vencidas)} disputa(s) YA VENCIERON sin respuesta — riesgo de pérdida automática.")
+        st.error(f"{len(vencidas)} disputa(s) VENCIERON sin que enviáramos evidencia — riesgo de pérdida automática.")
         st.dataframe(vencidas[["Customer Email", "Disputed Amount", "Dispute Reason", "Dispute Evidence Due (UTC)", "dias_restantes"]]
                      .rename(columns={"Customer Email": "Cliente", "Disputed Amount": "Monto USD",
                                        "Dispute Reason": "Motivo", "Dispute Evidence Due (UTC)": "Vencimiento",
@@ -256,19 +277,33 @@ with tab4:
                      use_container_width=True, hide_index=True)
 
     if len(urgentes):
-        st.warning(f"{len(urgentes)} disputa(s) vencen en los próximos 7 días.")
+        st.warning(f"{len(urgentes)} disputa(s) vencen en los próximos 7 días — enviar evidencia antes de la fecha.")
         st.dataframe(urgentes[["Customer Email", "Disputed Amount", "Dispute Reason", "Dispute Evidence Due (UTC)", "dias_restantes"]]
                      .rename(columns={"Customer Email": "Cliente", "Disputed Amount": "Monto USD",
                                        "Dispute Reason": "Motivo", "Dispute Evidence Due (UTC)": "Vencimiento",
                                        "dias_restantes": "Días restantes"}),
                      use_container_width=True, hide_index=True)
 
-    st.markdown("**Todas las disputas pendientes**")
-    st.dataframe(pendientes[["Customer Email", "Disputed Amount", "Dispute Reason", "Dispute Status Label", "Dispute Evidence Due (UTC)", "dias_restantes"]]
-                 .rename(columns={"Customer Email": "Cliente", "Disputed Amount": "Monto USD",
-                                   "Dispute Reason": "Motivo", "Dispute Status Label": "Estado",
-                                   "Dispute Evidence Due (UTC)": "Vencimiento", "dias_restantes": "Días restantes"}),
-                 use_container_width=True, hide_index=True)
+    if accion.empty:
+        st.success("No hay disputas esperando envío de evidencia. Al día.")
+
+    st.divider()
+
+    # --- Esperando al banco: under_review (informativo, no es riesgo operativo nuestro) ---
+    st.subheader("🕒 Esperando resolución del banco emisor")
+    en_revision = df[df["Dispute Status"] == "under_review"].copy()
+    en_revision["dias_en_espera"] = (hoy - en_revision["Dispute Date (UTC)"]).dt.days
+    en_revision = en_revision.sort_values("dias_en_espera", ascending=False)
+
+    st.metric("Disputas en revisión por el banco", len(en_revision))
+    if not en_revision.empty:
+        st.caption("Ya enviamos evidencia en estos casos. El banco emisor decide — no requieren acción nuestra, solo seguimiento.")
+        st.dataframe(en_revision[["Customer Email", "Disputed Amount", "Dispute Reason", "Dispute Date (UTC)", "dias_en_espera"]]
+                     .rename(columns={"Customer Email": "Cliente", "Disputed Amount": "Monto USD",
+                                       "Dispute Reason": "Motivo", "Dispute Date (UTC)": "Fecha de disputa",
+                                       "dias_en_espera": "Días esperando al banco"}),
+                     use_container_width=True, hide_index=True)
+
     st.caption("Vista no filtrada por mes — muestra todas las disputas abiertas en el dataset cargado.")
 
 # ===================== TAB 5: DETALLE =====================

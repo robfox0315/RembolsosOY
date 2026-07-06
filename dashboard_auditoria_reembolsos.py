@@ -177,14 +177,38 @@ with tab3:
         df_ag["Salvados"] = df_ag["Rechazado"]
 
     df_ag = df_ag.sort_values("Salvados", ascending=False)
-    st.metric("Total salvados (mayo, según definición seleccionada)", int(df_ag["Salvados"].sum()))
+
+    total_salvados = int(df_ag["Salvados"].sum())
+    total_asignados = int(df_ag["Total tickets"].sum())
+    tasa_global = total_salvados / total_asignados * 100 if total_asignados else 0
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total tickets cerrados (mayo)", total_asignados)
+    m2.metric("Reembolsos salvados", total_salvados)
+    m3.metric("Tasa de rescate", f"{tasa_global:.0f}%")
+    st.caption("14 'Reembolso rechazado' + 10 'Resuelto exitoso' = 24 salvados sobre 96 tickets.")
+
+    # Tabla por agente con tasa individual
+    tabla_ag = df_ag[["Agente", "Total tickets", "Salvados"]].copy()
+    tabla_ag = tabla_ag.rename(columns={"Total tickets": "Asignados"})
+    tabla_ag["Tasa"] = (tabla_ag["Salvados"] / tabla_ag["Asignados"] * 100).round(1).astype(str) + "%"
+    tabla_ag.loc[tabla_ag["Asignados"] == 0, "Tasa"] = "—"
 
     fig = px.bar(df_ag, x="Agente", y="Salvados", text="Salvados", color_discrete_sequence=[TEAL])
     fig.update_traces(textposition="outside")
     fig.update_layout(height=380, xaxis_title="")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.dataframe(df_ag[cols + ["Salvados"]], use_container_width=True, hide_index=True)
+    st.markdown("**Asignado vs. salvado por agente**")
+    st.dataframe(tabla_ag, use_container_width=True, hide_index=True)
+
+    st.info("⚠️ **Para leer con cuidado:** Laura Pereira es la única con volumen alto **y** tasa alta "
+            "(29 asignados, 44.8%) — el dato más sólido. Carolina Neira y Carlos Jiménez muestran 66-100% "
+            "pero con n=2-3: muestra insuficiente, un solo caso mueve el % 33-50 puntos. No presentarlos como "
+            "'el mejor agente' sin ese contexto.")
+
+    with st.expander("Ver desglose completo por resolución"):
+        st.dataframe(df_ag[cols + ["Salvados"]], use_container_width=True, hide_index=True)
 
 # ===================== TAB 4: RESUMEN PARA ANGELA =====================
 with tab4:
@@ -203,9 +227,21 @@ with tab4:
 **3 puntos para llevar a la sesión:**
 1. El SLA de cierre está en **{:.0f}%** de cumplimiento histórico — mejoró fuerte en mayo, vale la pena entender por qué y replicarlo.
 2. El monto en riesgo (reembolsos + disputas) **casi se duplicó** entre enero y mayo — junio parece bajar pero es dato incompleto (disputas llegan tarde).
-3. El ranking de "salvados por agente" está listo pero **la definición exacta depende de la respuesta de Iva** — no presentarlo como número cerrado todavía.
-
-**Antes de la sesión, confirmar con Iva:**
-- ¿`Resuelto exitoso` cuenta como salvado?
-- ¿Por qué `ADMIN- Reembolso` casi desaparece después de marzo?
+3. El ranking de "salvados por agente" está confirmado: **24 de 96 tickets salvados en mayo (25%)**, liderado por Laura Pereira.
 """.format(sla_pct))
+
+    st.divider()
+    st.markdown("**📌 Cifras clave para leer en vivo**")
+    cA, cB = st.columns(2)
+    with cA:
+        st.markdown("**Junio — Stripe (validado)**")
+        st.table(pd.DataFrame({
+            "Métrica": ["Reembolsos", "Disputas (con fee)", "Total en riesgo"],
+            "Cifra": ["93 casos · $11,805.94", "38 casos · $6,566.00", "$18,371.94"]
+        }))
+    with cB:
+        st.markdown("**Mayo — Salvados (HubSpot)**")
+        st.table(pd.DataFrame({
+            "Métrica": ["Tickets cerrados", "Salvados", "Tasa de rescate"],
+            "Cifra": ["96", "24 (14 rechazados + 10 resueltos)", "25%"]
+        }))

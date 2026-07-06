@@ -110,9 +110,44 @@ n_casos_totales = n_refunds + n_disputes
 # ------------------------------------------------------------------
 # TABS
 # ------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Resumen Ejecutivo", "💸 Reembolsos", "⚠️ Disputas", "🚨 Pendientes urgentes", "📋 Detalle de casos"
+tab1, tab2, tab3, tab6, tab4, tab5 = st.tabs([
+    "📊 Resumen Ejecutivo", "💸 Reembolsos", "⚠️ Disputas", "👤 Rescate por agente", "🚨 Pendientes urgentes", "📋 Detalle de casos"
 ])
+
+# ===================== TAB 6: RESCATE POR AGENTE (datos HubSpot, mayo 2026) =====================
+with tab6:
+    st.subheader("👤 Reembolsos salvados por agente — Mayo 2026")
+    st.caption("Fuente: HubSpot API, categoría FID- Rescate de reembolsos, cerrados en mayo 2026. "
+               "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso' (definición confirmada por Iva).")
+
+    AGENTES = pd.DataFrame([
+        ("Laura Pereira", 29, 13), ("Alonso Palacios", 24, 1), ("Diana Blanco", 17, 2),
+        ("Glina Cárdenas", 7, 1), ("Laura Ospina", 4, 2), ("Carolina Neira", 3, 2),
+        ("Carlos D. Jiménez", 2, 2), ("Giselle Villegas", 2, 1), ("Ivanna Ortiz", 2, 0),
+        ("Sin asignar", 6, 0),
+    ], columns=["Agente", "Asignados", "Salvados"])
+    AGENTES["Tasa %"] = (AGENTES["Salvados"] / AGENTES["Asignados"] * 100).round(1)
+    AGENTES = AGENTES.sort_values("Salvados", ascending=False)
+
+    ta, tb, tc = st.columns(3)
+    ta.metric("Tickets cerrados", int(AGENTES["Asignados"].sum()))
+    tb.metric("Reembolsos salvados", int(AGENTES["Salvados"].sum()))
+    tc.metric("Tasa de rescate global", f"{AGENTES['Salvados'].sum()/AGENTES['Asignados'].sum()*100:.0f}%")
+
+    fig_ag = go.Figure()
+    fig_ag.add_bar(x=AGENTES["Agente"], y=AGENTES["Asignados"], name="Asignados", marker_color=BLUE)
+    fig_ag.add_bar(x=AGENTES["Agente"], y=AGENTES["Salvados"], name="Salvados", marker_color=TEAL)
+    fig_ag.update_layout(barmode="group", height=400, xaxis_title="", yaxis_title="Tickets", legend_title="")
+    st.plotly_chart(fig_ag, use_container_width=True)
+
+    tabla_ag = AGENTES.copy()
+    tabla_ag["Tasa %"] = tabla_ag["Tasa %"].astype(str) + "%"
+    st.dataframe(tabla_ag, use_container_width=True, hide_index=True)
+
+    st.info("⚠️ Laura Pereira es la única con volumen alto y tasa alta (29 asignados, 44.8%) — el dato más sólido. "
+            "Carolina Neira y Carlos Jiménez muestran 66-100% pero con solo 2-3 casos: muestra insuficiente, "
+            "un caso mueve el % 33-50 puntos. No presentar como 'el mejor agente' sin ese contexto.")
+    st.caption("Datos fijos de mayo (vía API). Se harán dinámicos cuando el export de HubSpot incluya la columna Ticket owner.")
 
 # ===================== TAB 1: RESUMEN =====================
 with tab1:

@@ -152,7 +152,8 @@ with tab3:
     st.caption("Fuente: consulta directa a HubSpot API (categoría `FID- Rescate de reembolsos`), 05-jul-2026. "
                "El CSV de export estándar no incluye el propietario del ticket — pendiente agregar esa columna a futuros exports.")
 
-    st.warning("⚠️ **Definición pendiente de confirmar con Iva.** Se muestran ambas interpretaciones — no elegir una para Angela sin su respuesta.")
+    st.success("✅ **Definición confirmada (05-jul-2026):** 'salvado' = Rechazado + Resuelto exitoso "
+               "(mismos tickets migrados de categoría). Total mayo = **24 de 96** (25%).")
 
     datos = [
         ("Laura Pereira", 11, 2, 0, 11, 5, 29),
@@ -169,11 +170,11 @@ with tab3:
     cols = ["Agente", "Rechazado", "Resuelto exitoso", "Sin rescate", "Aprobado", "Duplicado/Won't do", "Total tickets"]
     df_ag = pd.DataFrame(datos, columns=cols)
 
-    definicion = st.radio("Definición de 'salvado'", ["Estricta: solo Rechazado", "Amplia: Rechazado + Resuelto exitoso"], horizontal=True)
-    if definicion.startswith("Estricta"):
-        df_ag["Salvados"] = df_ag["Rechazado"]
-    else:
+    definicion = st.radio("Definición de 'salvado'", ["Amplia: Rechazado + Resuelto exitoso (oficial)", "Estricta: solo Rechazado"], horizontal=True)
+    if definicion.startswith("Amplia"):
         df_ag["Salvados"] = df_ag["Rechazado"] + df_ag["Resuelto exitoso"]
+    else:
+        df_ag["Salvados"] = df_ag["Rechazado"]
 
     df_ag = df_ag.sort_values("Salvados", ascending=False)
     st.metric("Total salvados (mayo, según definición seleccionada)", int(df_ag["Salvados"].sum()))

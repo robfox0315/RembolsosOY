@@ -7,6 +7,99 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
+from datetime import datetime, timezone
+
+HUBSPOT_BASE = "https://api.hubapi.com"
+CATEGORIA_RESCATE = "FID- Rescate de reembolsos"
+
+def _mes_bounds_ms(year, month):
+    """Devuelve (inicio, fin) del mes en milisegundos UTC para filtrar closed_date."""
+    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) if month == 12 else datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+def _es_salvado(resolucion):
+    """Salvado = Reembolso rechazado + Resuelto exitoso (ISSUE_FIXED). Match flexible por si el API devuelve códigos internos."""
+    if not resolucion:
+        return False
+    r = str(resolucion).lower()
+    return ("rechazado" in r) or ("exitoso" in r) or ("issue_fixed" in r)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def hs_fetch_owners(token):
+    headers = {"Authorization": f"Bearer {token}"}
+    owners, after = {}, None
+    while True:
+        params = {"limit": 100}
+        if after:
+            params["after"] = after
+        r = requests.get(f"{HUBSPOT_BASE}/crm/v3/owners/", headers=headers, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        for o in data.get("results", []):
+            nombre = f"{o.get('firstName','')} {o.get('lastName','')}".strip() or o.get("email", f"ID {o.get('id')}")
+            owners[str(o["id"])] = nombre
+        after = data.get("paging", {}).get("next", {}).get("after")
+        if not after:
+            break
+    return owners
+
+@st.cache_data(ttl=600, show_spinner=False)
+def hs_fetch_rescate(token, start_ms, end_ms):
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = f"{HUBSPOT_BASE}/crm/v3/objects/tickets/search"
+    resultados, after = [], None
+    while True:
+        body = {
+            "filterGroups": [{"filters": [
+                {"propertyName": "hs_ticket_category", "operator": "EQ", "value": CATEGORIA_RESCATE},
+                {"propertyName": "closed_date", "operator": "BETWEEN", "value": start_ms, "highValue": end_ms},
+            ]}],
+            "properties": ["hubspot_owner_id", "hs_resolution", "closed_date", "hs_ticket_category", "monto_de_reembolso"],
+            "limit": 100,
+        }
+        if after:
+            body["after"] = after
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        resultados.extend(data.get("results", []))
+        after = data.get("paging", {}).get("next", {}).get("after")
+        if not after:
+            break
+    return resultados
+
+def hs_construir_tabla_agentes(token, year, month):
+    """Devuelve DataFrame [Agente, Asignados, Salvados, Monto salvado, Tasa %] + desglose de resoluciones."""
+    start_ms, end_ms = _mes_bounds_ms(year, month)
+    owners = hs_fetch_owners(token)
+    tickets = hs_fetch_rescate(token, start_ms, end_ms)
+
+    filas, resoluciones = {}, {}
+    for t in tickets:
+        props = t.get("properties", {})
+        oid = str(props.get("hubspot_owner_id") or "Sin asignar")
+        agente = owners.get(oid, "Sin asignar" if oid == "Sin asignar" else f"ID {oid}")
+        reso = props.get("hs_resolution")
+        try:
+            monto = float(props.get("monto_de_reembolso") or 0)
+        except (ValueError, TypeError):
+            monto = 0.0
+        resoluciones[reso or "(sin resolución)"] = resoluciones.get(reso or "(sin resolución)", 0) + 1
+        if agente not in filas:
+            filas[agente] = {"Asignados": 0, "Salvados": 0, "Monto salvado": 0.0}
+        filas[agente]["Asignados"] += 1
+        if _es_salvado(reso):
+            filas[agente]["Salvados"] += 1
+            filas[agente]["Monto salvado"] += monto
+
+    df = pd.DataFrame([{"Agente": a, **v} for a, v in filas.items()])
+    if not df.empty:
+        df["Tasa %"] = (df["Salvados"] / df["Asignados"] * 100).round(1)
+        df = df.sort_values("Salvados", ascending=False)
+    return df, resoluciones
+
 from datetime import datetime, timedelta
 import io
 
@@ -114,40 +207,108 @@ tab1, tab2, tab3, tab6, tab4, tab5 = st.tabs([
     "📊 Resumen Ejecutivo", "💸 Reembolsos", "⚠️ Disputas", "👤 Rescate por agente", "🚨 Pendientes urgentes", "📋 Detalle de casos"
 ])
 
-# ===================== TAB 6: RESCATE POR AGENTE (datos HubSpot, mayo 2026) =====================
+# ===================== TAB 6: RESCATE POR AGENTE (HubSpot API en vivo) =====================
 with tab6:
-    st.subheader("👤 Reembolsos salvados por agente — Mayo 2026")
-    st.caption("Fuente: HubSpot API, categoría FID- Rescate de reembolsos, cerrados en mayo 2026. "
-               "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso' (definición confirmada por Iva).")
+    st.subheader("👤 Reembolsos salvados por agente")
+    st.caption("Fuente: HubSpot API en vivo · categoría FID- Rescate de reembolsos · "
+               "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso'.")
 
-    AGENTES = pd.DataFrame([
-        ("Laura Pereira", 29, 13), ("Alonso Palacios", 24, 1), ("Diana Blanco", 17, 2),
-        ("Glina Cárdenas", 7, 1), ("Laura Ospina", 4, 2), ("Carolina Neira", 3, 2),
-        ("Carlos D. Jiménez", 2, 2), ("Giselle Villegas", 2, 1), ("Ivanna Ortiz", 2, 0),
-        ("Sin asignar", 6, 0),
-    ], columns=["Agente", "Asignados", "Salvados"])
-    AGENTES["Tasa %"] = (AGENTES["Salvados"] / AGENTES["Asignados"] * 100).round(1)
-    AGENTES = AGENTES.sort_values("Salvados", ascending=False)
+    # Token desde Streamlit Secrets (nunca en el código)
+    token = None
+    try:
+        token = st.secrets["HUBSPOT_TOKEN"]
+    except Exception:
+        token = None
 
-    ta, tb, tc = st.columns(3)
-    ta.metric("Tickets cerrados", int(AGENTES["Asignados"].sum()))
-    tb.metric("Reembolsos salvados", int(AGENTES["Salvados"].sum()))
-    tc.metric("Tasa de rescate global", f"{AGENTES['Salvados'].sum()/AGENTES['Asignados'].sum()*100:.0f}%")
+    if not token:
+        st.warning("🔑 Falta configurar el token de HubSpot para actualizar en vivo.")
+        st.markdown("""
+**Cómo activarlo (una sola vez):**
+1. En HubSpot: **Configuración → Integraciones → Private Apps → Create a private app**
+2. En *Scopes*, marca lectura de tickets: `crm.objects.tickets.read` y `crm.objects.owners.read`
+3. Copia el token que empieza con `pat-...`
+4. En Streamlit Cloud: tu app → **Settings → Secrets** → pega:
+   ```
+   HUBSPOT_TOKEN = "pat-xxxxxxxx"
+   ```
+5. Guarda. La app se reinicia y esta pestaña se actualiza sola.
+""")
+        st.info("Mientras tanto, referencia validada de mayo 2026: 96 tickets, 24 salvados (25%), líder Laura Pereira (13).")
+    else:
+        hoy = datetime.now()
+        cA, cB, cC = st.columns([1, 1, 1])
+        with cA:
+            year = st.selectbox("Año", list(range(2026, hoy.year + 1)), index=0)
+        with cB:
+            meses = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+                     7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
+            month = st.selectbox("Mes", list(meses.keys()), format_func=lambda m: meses[m],
+                                 index=min(hoy.month - 1, 11))
+        with cC:
+            st.write("")
+            st.write("")
+            actualizar = st.button("🔄 Actualizar datos", use_container_width=True)
 
-    fig_ag = go.Figure()
-    fig_ag.add_bar(x=AGENTES["Agente"], y=AGENTES["Asignados"], name="Asignados", marker_color=BLUE)
-    fig_ag.add_bar(x=AGENTES["Agente"], y=AGENTES["Salvados"], name="Salvados", marker_color=TEAL)
-    fig_ag.update_layout(barmode="group", height=400, xaxis_title="", yaxis_title="Tickets", legend_title="")
-    st.plotly_chart(fig_ag, use_container_width=True)
+        try:
+            with st.spinner("Consultando HubSpot..."):
+                df_ag, resoluciones = hs_construir_tabla_agentes(token, year, month)
 
-    tabla_ag = AGENTES.copy()
-    tabla_ag["Tasa %"] = tabla_ag["Tasa %"].astype(str) + "%"
-    st.dataframe(tabla_ag, use_container_width=True, hide_index=True)
+            if df_ag.empty:
+                st.info(f"No hay tickets de rescate cerrados en {meses[month]} {year}.")
+            else:
+                total_asig = int(df_ag["Asignados"].sum())
+                total_salv = int(df_ag["Salvados"].sum())
+                total_monto = df_ag["Monto salvado"].sum()
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Tickets cerrados", total_asig)
+                m2.metric("Reembolsos salvados", total_salv)
+                m3.metric("Tasa de rescate", f"{total_salv/total_asig*100:.0f}%")
+                m4.metric("Monto salvado", f"${total_monto:,.0f}")
 
-    st.info("⚠️ Laura Pereira es la única con volumen alto y tasa alta (29 asignados, 44.8%) — el dato más sólido. "
-            "Carolina Neira y Carlos Jiménez muestran 66-100% pero con solo 2-3 casos: muestra insuficiente, "
-            "un caso mueve el % 33-50 puntos. No presentar como 'el mejor agente' sin ese contexto.")
-    st.caption("Datos fijos de mayo (vía API). Se harán dinámicos cuando el export de HubSpot incluya la columna Ticket owner.")
+                if total_monto == 0:
+                    st.warning("⚠️ **El monto salvado está en $0.** El campo `Monto de reembolso` no se está llenando "
+                               "en el pipeline FID- Rescate. La comisión no se puede calcular hasta que se capture ese dato "
+                               "(ver instrucciones para el equipo). El conteo de salvados sí es correcto.")
+
+                # Calculadora de comisión
+                st.markdown("**💰 Cálculo de comisión por agente**")
+                pct = st.number_input("% de comisión sobre monto salvado", min_value=0.0, max_value=100.0,
+                                      value=5.0, step=0.5, format="%.1f")
+                df_ag["Comisión USD"] = (df_ag["Monto salvado"] * pct / 100).round(2)
+
+                fig_ag = go.Figure()
+                fig_ag.add_bar(x=df_ag["Agente"], y=df_ag["Asignados"], name="Asignados", marker_color=BLUE)
+                fig_ag.add_bar(x=df_ag["Agente"], y=df_ag["Salvados"], name="Salvados", marker_color=TEAL)
+                fig_ag.update_layout(barmode="group", height=400, xaxis_title="", yaxis_title="Tickets", legend_title="")
+                st.plotly_chart(fig_ag, use_container_width=True)
+
+                tabla = df_ag.copy()
+                tabla["Tasa %"] = tabla["Tasa %"].astype(str) + "%"
+                tabla["Monto salvado"] = tabla["Monto salvado"].apply(lambda x: f"${x:,.2f}")
+                tabla["Comisión USD"] = tabla["Comisión USD"].apply(lambda x: f"${x:,.2f}")
+                st.dataframe(tabla[["Agente", "Asignados", "Salvados", "Tasa %", "Monto salvado", "Comisión USD"]],
+                             use_container_width=True, hide_index=True)
+
+                # Exportar para nómina
+                import io as _io
+                buf = _io.StringIO()
+                df_ag[["Agente", "Asignados", "Salvados", "Monto salvado", "Comisión USD"]].to_csv(buf, index=False)
+                st.download_button(f"⬇️ Descargar comisiones {meses[month]} {year} (CSV)", buf.getvalue(),
+                                   file_name=f"comisiones_{year}_{month:02d}.csv", mime="text/csv")
+
+                with st.expander("Verificar: resoluciones encontradas este mes"):
+                    st.caption("Confirma que 'Reembolso rechazado' y 'Resuelto exitoso' se estén contando como salvados.")
+                    st.dataframe(pd.DataFrame(
+                        [{"Resolución": k, "Tickets": v, "¿Cuenta como salvado?": "Sí" if _es_salvado(k) else "No"}
+                         for k, v in sorted(resoluciones.items(), key=lambda x: -x[1])]
+                    ), use_container_width=True, hide_index=True)
+
+                st.caption("⚠️ Con muestras pequeñas (n<5) una tasa alta puede ser engañosa: un solo caso mueve el % 20-50 puntos. "
+                           "Prioriza agentes con volumen alto Y tasa alta.")
+        except requests.exceptions.HTTPError as e:
+            st.error(f"Error de HubSpot: {e.response.status_code}. Verifica que el token tenga permisos de tickets y owners.")
+        except Exception as e:
+            st.error(f"No se pudo consultar HubSpot: {e}")
 
 # ===================== TAB 1: RESUMEN =====================
 with tab1:

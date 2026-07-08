@@ -203,9 +203,179 @@ n_casos_totales = n_refunds + n_disputes
 # ------------------------------------------------------------------
 # TABS
 # ------------------------------------------------------------------
-tab1, tab2, tab3, tab6, tab4, tab5 = st.tabs([
-    "📊 Resumen Ejecutivo", "💸 Reembolsos", "⚠️ Disputas", "👤 Rescate por agente", "🚨 Pendientes urgentes", "📋 Detalle de casos"
+tab1, tab2, tab3, tab6, tab7, tab4, tab5 = st.tabs([
+    "📊 Resumen Ejecutivo", "💸 Reembolsos", "⚠️ Disputas", "👤 Rescate por agente (API)", "💵 Comisiones (CSV)", "🚨 Pendientes urgentes", "📋 Detalle de casos"
 ])
+
+# ===================== TAB 7: COMISIONES POR CSV (sin token) =====================
+with tab7:
+    st.subheader("💵 Comisiones por rescate — desde export de HubSpot")
+    st.caption("Sube el export del pipeline FID- Rescate de reembolsos. No requiere token. "
+               "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso'.")
+
+    cU1, cU2 = st.columns(2)
+    with cU1:
+        f_fid = st.file_uploader("CSV de tickets FID- Rescate de reembolsos", type="csv", key="fid_csv")
+    with cU2:
+        f_stripe_c = st.file_uploader("CSV de Stripe (opcional, para detectar contradicciones)", type="csv", key="stripe_com")
+
+    with st.expander("📋 Cómo exportar el CSV del FID correctamente"):
+        st.markdown("""
+1. En HubSpot: **CRM → Tickets**
+2. Filtra por **Categoría del ticket = `FID- Rescate de reembolsos`**
+3. **Exportar** (arriba a la derecha)
+4. Incluye: **Propietario del ticket**, **Resolución**, **Fecha de cierre**, **Monto de reembolso**, **Associated Contact**
+5. Sube el CSV aquí
+""")
+
+    if not f_fid:
+        st.info("Sube el CSV del pipeline FID para calcular comisiones por agente.")
+    else:
+        import io as _io2
+        import re as _re
+        fid = pd.read_csv(f_fid)
+        col_agente, col_reso, col_fecha, col_monto, col_contact = \
+            "Propietario del ticket", "Resolución", "Fecha de cierre", "Monto de reembolso", "Associated Contact"
+
+        faltan = [c for c in [col_agente, col_reso, col_fecha] if c not in fid.columns]
+        if faltan:
+            st.error(f"Al CSV le faltan columnas necesarias: {', '.join(faltan)}. Reexporta incluyéndolas.")
+        else:
+            def _es_salvado_csv(r):
+                if pd.isna(r):
+                    return False
+                r = str(r).lower()
+                return ("rechazado" in r) or ("exitoso" in r) or ("issue_fixed" in r)
+
+            fid["_salvado"] = fid[col_reso].apply(_es_salvado_csv)
+            fid["_mes"] = pd.to_datetime(fid[col_fecha], errors="coerce").dt.to_period("M").astype(str)
+            fid["_agente"] = fid[col_agente].fillna("Sin asignar")
+            tiene_monto = col_monto in fid.columns
+            fid["_monto"] = pd.to_numeric(fid[col_monto], errors="coerce").fillna(0) if tiene_monto else 0
+            if not tiene_monto:
+                st.warning("⚠️ El CSV no trae **Monto de reembolso** — el monto y la comisión saldrán en $0. "
+                           "Reexporta con esa columna para calcular pagos.")
+
+            # ---------- #4: detección de contradictorios con Stripe ----------
+            contradictorios = pd.DataFrame()
+            if f_stripe_c is not None and col_contact in fid.columns:
+                pay_c = pd.read_csv(f_stripe_c)
+                if "Customer Email" in pay_c.columns and "Amount Refunded" in pay_c.columns:
+                    def _mail(s):
+                        m = _re.search(r"\(([^)]+@[^)]+)\)", str(s))
+                        return (m.group(1) if m else str(s)).lower().strip()
+                    fid["_email"] = fid[col_contact].apply(_mail)
+                    pay_c["_email"] = pay_c["Customer Email"].astype(str).str.lower().str.strip()
+                    reembolsados = set(pay_c[pd.to_numeric(pay_c["Amount Refunded"], errors="coerce").fillna(0) > 0]["_email"])
+                    salv = fid[fid["_salvado"]].copy()
+                    salv["_contradice"] = salv["_email"].isin(reembolsados)
+                    contradictorios = salv[salv["_contradice"]]
+
+            # ---------- Selector de mes ----------
+            meses_disp = sorted(fid["_mes"].dropna().unique(), reverse=True)
+            modo = st.radio("Periodo", ["Un mes", "Acumulado del año (YTD)"], horizontal=True)
+            if modo == "Un mes":
+                mes_sel = st.selectbox("Mes a liquidar", meses_disp)
+                sub = fid[fid["_mes"] == mes_sel]
+                etiqueta = mes_sel
+            else:
+                sub = fid
+                etiqueta = "YTD_" + (meses_disp[0][:4] if meses_disp else "2026")
+
+            # excluir contradictorios del pago si existen
+            excluir_contra = False
+            if not contradictorios.empty:
+                st.error(f"⚠️ **#4 — {len(contradictorios)} caso(s) contradictorio(s):** marcados como salvados pero "
+                         f"con reembolso en Stripe. Pagar comisión por ellos = pagar de más.")
+                excluir_contra = st.checkbox("Excluir casos contradictorios del cálculo de comisión", value=True)
+
+            def _agrupar(df):
+                if excluir_contra and not contradictorios.empty:
+                    df = df[~df.index.isin(contradictorios.index)]
+                g = df.groupby("_agente").apply(lambda x: pd.Series({
+                    "Asignados": len(x),
+                    "Salvados": int(x["_salvado"].sum()),
+                    "Monto salvado": float(x.loc[x["_salvado"], "_monto"].sum()),
+                })).reset_index().rename(columns={"_agente": "Agente"})
+                g["Tasa %"] = (g["Salvados"] / g["Asignados"] * 100).round(1)
+                return g.sort_values("Salvados", ascending=False)
+
+            g = _agrupar(sub)
+
+            t1, t2, t3, t4 = st.columns(4)
+            t1.metric("Tickets", int(g["Asignados"].sum()))
+            t2.metric("Salvados", int(g["Salvados"].sum()))
+            t3.metric("Tasa", f"{g['Salvados'].sum()/max(g['Asignados'].sum(),1)*100:.0f}%")
+            t4.metric("Monto salvado", f"${g['Monto salvado'].sum():,.0f}")
+
+            # ---------- #3: comisión escalonada configurable ----------
+            st.markdown("**💰 Esquema de comisión (configurable)**")
+            tipo_com = st.radio("Tipo", ["Porcentaje plano", "Escalonado por tramos"], horizontal=True)
+            if tipo_com == "Porcentaje plano":
+                pct = st.number_input("% sobre monto salvado", 0.0, 100.0, 5.0, 0.5, format="%.1f", key="pctplano")
+                g["Comisión USD"] = (g["Monto salvado"] * pct / 100).round(2)
+            else:
+                base_criterio = st.selectbox("Los tramos se miden por", ["Monto salvado (USD)", "Cantidad de salvados"])
+                cc1, cc2, cc3 = st.columns(3)
+                with cc1:
+                    pct_base = st.number_input("% base", 0.0, 100.0, 5.0, 0.5, format="%.1f")
+                with cc2:
+                    umbral = st.number_input("Umbral para % alto", 0.0, 1_000_000.0, 1000.0, 50.0)
+                with cc3:
+                    pct_alto = st.number_input("% alto (si supera umbral)", 0.0, 100.0, 8.0, 0.5, format="%.1f")
+                base_col = "Monto salvado" if base_criterio.startswith("Monto") else "Salvados"
+                g["% aplicado"] = g[base_col].apply(lambda v: pct_alto if v >= umbral else pct_base)
+                g["Comisión USD"] = (g["Monto salvado"] * g["% aplicado"] / 100).round(2)
+                st.caption(f"Se aplica {pct_alto}% a quienes superan {umbral:,.0f} en '{base_criterio}', {pct_base}% al resto.")
+
+            fig = go.Figure()
+            fig.add_bar(x=g["Agente"], y=g["Asignados"], name="Asignados", marker_color=BLUE)
+            fig.add_bar(x=g["Agente"], y=g["Salvados"], name="Salvados", marker_color=TEAL)
+            fig.update_layout(barmode="group", height=400, xaxis_title="", yaxis_title="Tickets", legend_title="")
+            st.plotly_chart(fig, use_container_width=True)
+
+            show = g.copy()
+            show["Tasa %"] = show["Tasa %"].astype(str) + "%"
+            for c in ["Monto salvado", "Comisión USD"]:
+                show[c] = show[c].apply(lambda x: f"${x:,.2f}")
+            cols_show = ["Agente", "Asignados", "Salvados", "Tasa %", "Monto salvado", "Comisión USD"]
+            if "% aplicado" in show.columns:
+                show["% aplicado"] = show["% aplicado"].astype(str) + "%"
+                cols_show.insert(5, "% aplicado")
+            st.dataframe(show[cols_show], use_container_width=True, hide_index=True)
+
+            buf = _io2.StringIO()
+            g.to_csv(buf, index=False)
+            st.download_button(f"⬇️ Descargar liquidación ({etiqueta})", buf.getvalue(),
+                               file_name=f"comisiones_{etiqueta}.csv", mime="text/csv")
+
+            # ---------- #1: comparativa mes vs mes ----------
+            st.divider()
+            st.markdown("**📈 #1 — Salvados por agente, mes a mes**")
+            piv = fid[fid["_salvado"]].pivot_table(index="_agente", columns="_mes",
+                                                    values=col_reso, aggfunc="count", fill_value=0)
+            if piv.shape[1] >= 2:
+                ult, penult = piv.columns[-1], piv.columns[-2]
+                piv["Δ vs mes previo"] = piv[ult] - piv[penult]
+            st.dataframe(piv, use_container_width=True)
+            st.caption("Cada columna es un mes. La última columna muestra el cambio del mes más reciente vs. el anterior.")
+
+            # ---------- #4: lista de contradictorios ----------
+            if not contradictorios.empty:
+                st.divider()
+                st.markdown("**🚩 #4 — Casos a revisar antes de pagar (salvado en HubSpot pero reembolsado en Stripe)**")
+                cols_contra = [c for c in [col_agente, col_contact, col_reso, col_fecha] if c in contradictorios.columns]
+                st.dataframe(contradictorios[cols_contra], use_container_width=True, hide_index=True)
+                bufc = _io2.StringIO()
+                contradictorios[cols_contra].to_csv(bufc, index=False)
+                st.download_button("⬇️ Descargar casos a revisar", bufc.getvalue(),
+                                   file_name="casos_contradictorios.csv", mime="text/csv")
+
+            with st.expander("Verificar: resoluciones contadas como salvado"):
+                chk = sub.groupby(col_reso)["_salvado"].agg(["count", "first"]).reset_index()
+                chk.columns = ["Resolución", "Tickets", "¿Salvado?"]
+                chk["¿Salvado?"] = chk["¿Salvado?"].map({True: "Sí", False: "No"})
+                st.dataframe(chk, use_container_width=True, hide_index=True)
 
 # ===================== TAB 6: RESCATE POR AGENTE (HubSpot API en vivo) =====================
 with tab6:

@@ -735,6 +735,52 @@ with tab3:
     else:
         st.caption("Sin disputas resueltas (ganadas/perdidas) en este mes.")
 
+    # -------- Análisis histórico: ¿en qué motivos ganamos o perdemos? --------
+    st.divider()
+    st.markdown("### 🎯 ¿En qué tipo de disputa ganamos o perdemos? (histórico completo)")
+    st.caption("Cruce de motivo de disputa contra resultado, sobre TODAS las disputas cargadas (no solo el mes). "
+               "Ayuda a decidir dónde reforzar evidencia o proceso.")
+
+    hist = df[df["Dispute Status"].notna()].copy()
+    resueltas_h = hist[hist["Dispute Status"].isin(["won", "lost"])]
+
+    if resueltas_h.empty:
+        st.info("No hay disputas resueltas (ganadas/perdidas) en los datos cargados.")
+    else:
+        analisis = resueltas_h.groupby("Dispute Reason").apply(lambda g: pd.Series({
+            "Resueltas": len(g),
+            "Ganadas": int((g["Dispute Status"] == "won").sum()),
+            "Perdidas": int((g["Dispute Status"] == "lost").sum()),
+            "Monto en juego": g["Disputed Amount"].sum(),
+        })).reset_index()
+        analisis["Tasa de éxito %"] = (analisis["Ganadas"] / analisis["Resueltas"] * 100).round(1)
+        analisis = analisis.sort_values("Resueltas", ascending=False)
+
+        cA, cB = st.columns([3, 2])
+        with cA:
+            fig = go.Figure()
+            fig.add_bar(y=analisis["Dispute Reason"], x=analisis["Ganadas"], name="Ganadas",
+                        orientation="h", marker_color=GREEN)
+            fig.add_bar(y=analisis["Dispute Reason"], x=analisis["Perdidas"], name="Perdidas",
+                        orientation="h", marker_color=RED)
+            fig.update_layout(**PLOTLY_LAYOUT, height=360, barmode="stack", xaxis_title="Disputas resueltas")
+            st.plotly_chart(fig, use_container_width=True)
+        with cB:
+            tabla_h = analisis.copy()
+            tabla_h["Tasa de éxito %"] = tabla_h["Tasa de éxito %"].astype(str) + "%"
+            tabla_h["Monto en juego"] = tabla_h["Monto en juego"].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(tabla_h[["Dispute Reason", "Resueltas", "Ganadas", "Tasa de éxito %", "Monto en juego"]]
+                         .rename(columns={"Dispute Reason": "Motivo"}),
+                         use_container_width=True, hide_index=True)
+
+        # Alerta automática del punto débil
+        peor = analisis[analisis["Resueltas"] >= 5].sort_values("Tasa de éxito %").head(1)
+        if not peor.empty:
+            r = peor.iloc[0]
+            st.warning(f"🚩 **Punto débil:** en disputas por **{r['Dispute Reason']}** se ganan solo "
+                       f"{r['Tasa de éxito %']:.0f}% ({int(r['Ganadas'])} de {int(r['Resueltas'])} resueltas). "
+                       f"Es el tipo donde más se pierde con volumen — revisar qué evidencia se está enviando o si hay un problema de proceso detrás.")
+
 # ===================== TAB 4: PENDIENTES URGENTES =====================
 with tab4:
     st.subheader("🚨 Disputas que requieren acción de nuestro lado")

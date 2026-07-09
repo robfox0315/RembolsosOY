@@ -111,11 +111,10 @@ st.set_page_config(page_title="Opción Yo · Panel Financiero", layout="wide", p
 if "tema" not in st.session_state:
     st.session_state.tema = "Claro"
 
-_tc1, _tc2 = st.columns([5, 1])
+_tc1, _tc2 = st.columns([4, 1])
 with _tc2:
-    st.session_state.tema = st.selectbox("Tema", ["Claro", "Oscuro"],
-                                         index=0 if st.session_state.tema == "Claro" else 1,
-                                         label_visibility="collapsed")
+    st.session_state.tema = st.selectbox("🎨 Tema de color", ["Claro", "Oscuro"],
+                                         index=0 if st.session_state.tema == "Claro" else 1)
 MODO = st.session_state.tema
 
 # Acentos de marca (constantes en ambos temas)
@@ -157,7 +156,7 @@ st.markdown(f"""
 
 html, body, [class*="css"] {{ font-family: 'Inter', -apple-system, sans-serif; }}
 
-/* Ocultar header/footer de Streamlit para look de producto */
+/* Ocultar footer de Streamlit; se conserva el header con el menú de Settings */
 #MainMenu, footer {{ visibility: hidden; }}
 .block-container {{ padding-top: 1rem; padding-bottom: 3rem; max-width: 1400px; }}
 

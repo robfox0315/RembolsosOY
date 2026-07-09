@@ -477,6 +477,34 @@ with tab7:
             st.download_button(f"⬇️ Descargar liquidación ({etiqueta})", buf.getvalue(),
                                file_name=f"comisiones_{etiqueta}.csv", mime="text/csv")
 
+            # ---------- Desglose por cliente dentro de cada agente ----------
+            st.divider()
+            st.markdown("**Detalle por cliente recuperado (por agente)**")
+            st.caption("Cada cliente cuyo reembolso fue salvado, con el monto recuperado. "
+                       "La columna 'Reembolsado en Stripe' marca casos a revisar antes de pagar.")
+
+            salvados_det = sub[sub["_salvado"]].copy()
+            if excluir_contra and not contradictorios.empty:
+                salvados_det = salvados_det[~salvados_det.index.isin(contradictorios.index)]
+
+            cols_det = [c for c in [col_contact, col_reso, col_monto, "Reembolsado en Stripe", col_fecha]
+                        if c in salvados_det.columns]
+            agentes_orden = g.sort_values("Salvados", ascending=False)["Agente"].tolist()
+
+            for ag in agentes_orden:
+                filas_ag = salvados_det[salvados_det["_agente"] == ag]
+                if filas_ag.empty:
+                    continue
+                monto_ag = filas_ag["_monto"].sum()
+                with st.expander(f"{ag} · {len(filas_ag)} clientes · ${monto_ag:,.2f} recuperado"):
+                    tabla_det = filas_ag[cols_det].copy()
+                    rename_map = {col_contact: "Cliente", col_reso: "Resolución",
+                                  col_monto: "Monto recuperado", col_fecha: "Fecha de cierre"}
+                    tabla_det = tabla_det.rename(columns=rename_map)
+                    if "Monto recuperado" in tabla_det.columns:
+                        tabla_det["Monto recuperado"] = pd.to_numeric(tabla_det["Monto recuperado"], errors="coerce").fillna(0).apply(lambda x: f"${x:,.2f}")
+                    st.dataframe(tabla_det, use_container_width=True, hide_index=True)
+
             # ---------- #1: comparativa mes vs mes ----------
             st.divider()
             st.markdown("**Salvados por agente, mes a mes**")

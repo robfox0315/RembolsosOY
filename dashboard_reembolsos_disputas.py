@@ -103,20 +103,93 @@ def hs_construir_tabla_agentes(token, year, month):
 from datetime import datetime, timedelta
 import io
 
-st.set_page_config(page_title="Opción Yo | Reembolsos & Disputas", layout="wide", page_icon="💳")
+st.set_page_config(page_title="Opción Yo · Panel Financiero", layout="wide", page_icon="◆",
+                   initial_sidebar_state="collapsed")
 
-TEAL = "#16B6C2"
-BLUE = "#2F80ED"
-RED = "#E74C3C"
-GREY = "#8A94A6"
-GREEN = "#27AE60"
-AMBER = "#F2994A"
+# ============================ SISTEMA DE DISEÑO ============================
+TEAL = "#0EA5B5"       # primario de marca
+TEAL_DK = "#0E7C86"    # teal profundo
+BLUE = "#2563EB"       # acento secundario
+RED = "#DC2626"        # riesgo / alerta
+GREEN = "#16A34A"      # positivo
+AMBER = "#D97706"      # advertencia
+INK = "#0F172A"        # texto principal
+SLATE = "#64748B"      # texto secundario
+LINE = "#E2E8F0"       # bordes
 
 st.markdown(f"""
 <style>
-[data-testid="stMetricValue"] {{ color: {BLUE}; font-weight: 700; }}
-.stTabs [data-baseweb="tab"] {{ font-weight: 600; }}
-h1, h2, h3 {{ color: #1a1a2e; }}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+.stApp {{ background: #F8FAFC; }}
+html, body, [class*="css"] {{ font-family: 'Inter', -apple-system, sans-serif; }}
+
+/* Ocultar header/footer de Streamlit para look de producto */
+#MainMenu, footer, header {{ visibility: hidden; }}
+.block-container {{ padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1400px; }}
+
+/* Tipografía de títulos */
+h1, h2, h3 {{ font-family: 'Space Grotesk', sans-serif; color: {INK}; letter-spacing: -0.02em; }}
+h2 {{ font-size: 1.35rem !important; font-weight: 600 !important; margin-top: 0.5rem !important; }}
+h3 {{ font-size: 1.05rem !important; font-weight: 600 !important; }}
+
+/* Header de marca */
+.brand-header {{
+  background: linear-gradient(135deg, {TEAL_DK} 0%, {TEAL} 100%);
+  border-radius: 16px; padding: 26px 32px; margin-bottom: 22px;
+  box-shadow: 0 10px 30px -12px rgba(14,124,134,0.45);
+}}
+.brand-header .eyebrow {{
+  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+  color: rgba(255,255,255,0.78); margin-bottom: 6px;
+}}
+.brand-header .title {{
+  font-family: 'Space Grotesk', sans-serif; font-size: 1.75rem; font-weight: 700;
+  color: #fff; letter-spacing: -0.02em; line-height: 1.15;
+}}
+.brand-header .subtitle {{ color: rgba(255,255,255,0.85); font-size: 0.9rem; margin-top: 4px; }}
+
+/* Métricas tipo tarjeta */
+[data-testid="stMetric"] {{
+  background: #fff; border: 1px solid {LINE}; border-radius: 14px;
+  padding: 18px 20px; box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+  border-left: 3px solid {TEAL};
+}}
+[data-testid="stMetricLabel"] p {{
+  font-size: 0.75rem !important; font-weight: 600 !important; color: {SLATE} !important;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}}
+[data-testid="stMetricValue"] {{
+  font-family: 'Space Grotesk', sans-serif !important; color: {INK} !important;
+  font-weight: 700 !important; font-variant-numeric: tabular-nums;
+}}
+[data-testid="stMetricDelta"] {{ font-weight: 600 !important; }}
+
+/* Tabs refinadas */
+.stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid {LINE}; }}
+.stTabs [data-baseweb="tab"] {{
+  font-weight: 600; font-size: 0.9rem; color: {SLATE};
+  padding: 10px 16px; border-radius: 8px 8px 0 0;
+}}
+.stTabs [aria-selected="true"] {{ color: {TEAL_DK} !important; background: rgba(14,165,181,0.06); }}
+.stTabs [data-baseweb="tab-highlight"] {{ background: {TEAL} !important; height: 3px; }}
+
+/* Tablas */
+[data-testid="stDataFrame"] {{ border: 1px solid {LINE}; border-radius: 12px; overflow: hidden; }}
+
+/* Botones */
+.stButton button, .stDownloadButton button {{
+  border-radius: 10px; font-weight: 600; border: 1px solid {LINE};
+  transition: all 0.15s ease;
+}}
+.stDownloadButton button {{ background: {TEAL_DK}; color: #fff; border: none; }}
+.stDownloadButton button:hover {{ background: {TEAL}; }}
+
+/* Divisores */
+hr {{ border-color: {LINE}; margin: 1.5rem 0; }}
+
+/* Cajas de alerta más suaves */
+[data-testid="stAlert"] {{ border-radius: 12px; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -128,11 +201,28 @@ DISPUTE_STATUS_LABELS = {
     "under_review": "En revisión", "needs_response": "Necesita respuesta"
 }
 
+# Plantilla de estilo unificada para gráficos Plotly
+PLOTLY_LAYOUT = dict(
+    font=dict(family="Inter, sans-serif", size=13, color=INK),
+    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+    margin=dict(t=30, b=30, l=10, r=10),
+    xaxis=dict(gridcolor=LINE, zerolinecolor=LINE),
+    yaxis=dict(gridcolor=LINE, zerolinecolor=LINE),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    colorway=[TEAL, BLUE, AMBER, GREEN, RED],
+)
+
 # ------------------------------------------------------------------
-# CARGA ACUMULATIVA DE ARCHIVOS (dedup por id)
+# HEADER DE MARCA
 # ------------------------------------------------------------------
-st.title("💳 Reembolsos y Disputas — Opción Yo")
-st.caption("Fuente: exportación de pagos (Stripe/unified_payments). Sube uno o varios CSV — se acumulan sin duplicar.")
+st.markdown(f"""
+<div class="brand-header">
+  <div class="eyebrow">Opción Yo · Operaciones</div>
+  <div class="title">Panel Financiero — Reembolsos, Disputas y Rescate</div>
+  <div class="subtitle">Stripe + HubSpot · datos validados contra la fuente</div>
+</div>
+""", unsafe_allow_html=True)
+st.caption("Sube el CSV de pagos de Stripe (unified_payments). Se acumulan varios archivos sin duplicar por ID.")
 
 if "payments_df" not in st.session_state:
     st.session_state.payments_df = pd.DataFrame()
@@ -331,7 +421,7 @@ with tab7:
             fig = go.Figure()
             fig.add_bar(x=g["Agente"], y=g["Asignados"], name="Asignados", marker_color=BLUE)
             fig.add_bar(x=g["Agente"], y=g["Salvados"], name="Salvados", marker_color=TEAL)
-            fig.update_layout(barmode="group", height=400, xaxis_title="", yaxis_title="Tickets", legend_title="")
+            fig.update_layout(**PLOTLY_LAYOUT, barmode="group", height=400, yaxis_title="Tickets")
             st.plotly_chart(fig, use_container_width=True)
 
             show = g.copy()
@@ -449,7 +539,7 @@ with tab6:
                 fig_ag = go.Figure()
                 fig_ag.add_bar(x=df_ag["Agente"], y=df_ag["Asignados"], name="Asignados", marker_color=BLUE)
                 fig_ag.add_bar(x=df_ag["Agente"], y=df_ag["Salvados"], name="Salvados", marker_color=TEAL)
-                fig_ag.update_layout(barmode="group", height=400, xaxis_title="", yaxis_title="Tickets", legend_title="")
+                fig_ag.update_layout(**PLOTLY_LAYOUT, barmode="group", height=400, yaxis_title="Tickets")
                 st.plotly_chart(fig_ag, use_container_width=True)
 
                 tabla = df_ag.copy()
@@ -504,7 +594,7 @@ with tab1:
             marker_color=[TEAL, BLUE],
             text=[same, prev], textposition="outside"
         ))
-        fig.update_layout(height=320, margin=dict(t=20, b=20), showlegend=False)
+        fig.update_layout(**{k:v for k,v in PLOTLY_LAYOUT.items() if k!="legend"}, height=320, showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Fuente: `Created date (UTC)` vs. `Refunded date (UTC)`.")
     with cc2:
@@ -517,7 +607,7 @@ with tab1:
             marker_color=[TEAL, BLUE],
             text=[same_d, prev_d], textposition="outside"
         ))
-        fig.update_layout(height=320, margin=dict(t=20, b=20), showlegend=False)
+        fig.update_layout(**{k:v for k,v in PLOTLY_LAYOUT.items() if k!="legend"}, height=320, showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Fuente: `Created date (UTC)` vs. `Dispute Date (UTC)`.")
 
@@ -529,7 +619,7 @@ with tab1:
         daily = pd.concat([r_daily, d_daily], axis=1).fillna(0).reset_index().rename(columns={"index": "Fecha"})
         fig = px.line(daily, x="Fecha", y=["Reembolsos", "Disputas"],
                        color_discrete_map={"Reembolsos": TEAL, "Disputas": RED}, markers=True)
-        fig.update_layout(height=350, margin=dict(t=20, b=20), legend_title="")
+        fig.update_layout(**PLOTLY_LAYOUT, height=350)
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Fuente: conteo diario por `Refunded date (UTC)` y `Dispute Date (UTC)`.")
 
@@ -564,7 +654,7 @@ with tab2:
     tipo = refunds_m.groupby("tipo_cargo").agg(casos=("id", "count"), monto=("Amount Refunded", "sum")).reset_index().sort_values("monto", ascending=False)
     fig = px.bar(tipo, x="tipo_cargo", y="monto", text="casos", color_discrete_sequence=[TEAL])
     fig.update_traces(texttemplate="%{text} casos", textposition="outside")
-    fig.update_layout(height=350, margin=dict(t=20, b=20), xaxis_title="", yaxis_title="Monto USD ($)")
+    fig.update_layout(**PLOTLY_LAYOUT, height=350, yaxis_title="Monto USD ($)")
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Fuente: prefijo de `Description` (Invoice / Subscription creation / Subscription update).")
 
@@ -591,7 +681,7 @@ with tab3:
         motivo = disputes_m.groupby("Dispute Reason").agg(casos=("id", "count"), monto=("Disputed Amount", "sum")).reset_index().sort_values("casos", ascending=False)
         fig = px.bar(motivo, x="Dispute Reason", y="casos", text="casos", color_discrete_sequence=[BLUE])
         fig.update_traces(textposition="outside")
-        fig.update_layout(height=350, margin=dict(t=20, b=20), xaxis_title="", yaxis_title="Casos")
+        fig.update_layout(**PLOTLY_LAYOUT, height=350, yaxis_title="Casos")
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Fuente: `Dispute Reason`.")
     with cc2:
@@ -600,7 +690,7 @@ with tab3:
         estado = disputes_m.groupby("Dispute Status Label").agg(casos=("id", "count"), monto=("Disputed Amount", "sum")).reset_index()
         fig = px.pie(estado, names="Dispute Status Label", values="casos",
                       color="Dispute Status Label", color_discrete_map=status_colors, hole=0.45)
-        fig.update_layout(height=350, margin=dict(t=20, b=20))
+        fig.update_layout(**PLOTLY_LAYOUT, height=350)
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Fuente: `Dispute Status` (won/lost/under_review/needs_response).")
 

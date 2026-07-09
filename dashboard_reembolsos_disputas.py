@@ -102,6 +102,14 @@ def hs_construir_tabla_agentes(token, year, month):
 
 from datetime import datetime, timedelta
 import io
+import re
+
+MESES_ES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+            7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
+
+def mes_es(period):
+    """Convierte un pandas.Period (mensual) a texto en español, ej. 'Junio 2026'."""
+    return f"{MESES_ES[period.month]} {period.year}"
 
 st.set_page_config(page_title="Opción Yo · Panel Financiero", layout="wide", page_icon="◆",
                    initial_sidebar_state="collapsed")
@@ -326,12 +334,12 @@ n_casos_totales = n_refunds + n_disputes
 # TABS
 # ------------------------------------------------------------------
 tab1, tab2, tab3, tab6, tab7, tab4, tab5 = st.tabs([
-    "📊 Resumen Ejecutivo", "💸 Reembolsos", "⚠️ Disputas", "👤 Rescate por agente (API)", "💵 Comisiones (CSV)", "🚨 Pendientes urgentes", "📋 Detalle de casos"
+    "Resumen ejecutivo", "Reembolsos", "Disputas", "Rescate por agente", "Comisiones", "Pendientes urgentes", "Detalle de casos"
 ])
 
 # ===================== TAB 7: COMISIONES POR CSV (sin token) =====================
 with tab7:
-    st.subheader("💵 Comisiones por rescate — desde export de HubSpot")
+    st.subheader("Comisiones por rescate — desde export de HubSpot")
     st.caption("Sube el export del pipeline FID- Rescate de reembolsos. No requiere token. "
                "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso'.")
 
@@ -353,8 +361,6 @@ with tab7:
     if not f_fid:
         st.info("Sube el CSV del pipeline FID para calcular comisiones por agente.")
     else:
-        import io as _io2
-        import re as _re
         fid = pd.read_csv(f_fid)
         col_agente, col_reso, col_fecha, col_monto, col_contact = \
             "Propietario del ticket", "Resolución", "Fecha de cierre", "Monto de reembolso", "Associated Contact"
@@ -384,7 +390,7 @@ with tab7:
                 pay_c = pd.read_csv(f_stripe_c)
                 if "Customer Email" in pay_c.columns and "Amount Refunded" in pay_c.columns:
                     def _mail(s):
-                        m = _re.search(r"\(([^)]+@[^)]+)\)", str(s))
+                        m = re.search(r"\(([^)]+@[^)]+)\)", str(s))
                         return (m.group(1) if m else str(s)).lower().strip()
                     fid["_email"] = fid[col_contact].apply(_mail)
                     pay_c["_email"] = pay_c["Customer Email"].astype(str).str.lower().str.strip()
@@ -431,7 +437,7 @@ with tab7:
             t4.metric("Monto salvado", f"${g['Monto salvado'].sum():,.0f}")
 
             # ---------- #3: comisión escalonada configurable ----------
-            st.markdown("**💰 Esquema de comisión (configurable)**")
+            st.markdown("**Esquema de comisión (configurable)**")
             tipo_com = st.radio("Tipo", ["Porcentaje plano", "Escalonado por tramos"], horizontal=True)
             if tipo_com == "Porcentaje plano":
                 pct = st.number_input("% sobre monto salvado", 0.0, 100.0, 5.0, 0.5, format="%.1f", key="pctplano")
@@ -466,14 +472,14 @@ with tab7:
                 cols_show.insert(5, "% aplicado")
             st.dataframe(show[cols_show], use_container_width=True, hide_index=True)
 
-            buf = _io2.StringIO()
+            buf = io.StringIO()
             g.to_csv(buf, index=False)
             st.download_button(f"⬇️ Descargar liquidación ({etiqueta})", buf.getvalue(),
                                file_name=f"comisiones_{etiqueta}.csv", mime="text/csv")
 
             # ---------- #1: comparativa mes vs mes ----------
             st.divider()
-            st.markdown("**📈 #1 — Salvados por agente, mes a mes**")
+            st.markdown("**Salvados por agente, mes a mes**")
             piv = fid[fid["_salvado"]].pivot_table(index="_agente", columns="_mes",
                                                     values=col_reso, aggfunc="count", fill_value=0)
             if piv.shape[1] >= 2:
@@ -485,10 +491,10 @@ with tab7:
             # ---------- #4: lista de contradictorios ----------
             if not contradictorios.empty:
                 st.divider()
-                st.markdown("**🚩 #4 — Casos a revisar antes de pagar (salvado en HubSpot pero reembolsado en Stripe)**")
+                st.markdown("**Casos a revisar antes de pagar** (marcados salvados en HubSpot pero reembolsados en Stripe)")
                 cols_contra = [c for c in [col_agente, col_contact, col_reso, col_fecha] if c in contradictorios.columns]
                 st.dataframe(contradictorios[cols_contra], use_container_width=True, hide_index=True)
-                bufc = _io2.StringIO()
+                bufc = io.StringIO()
                 contradictorios[cols_contra].to_csv(bufc, index=False)
                 st.download_button("⬇️ Descargar casos a revisar", bufc.getvalue(),
                                    file_name="casos_contradictorios.csv", mime="text/csv")
@@ -501,7 +507,7 @@ with tab7:
 
 # ===================== TAB 6: RESCATE POR AGENTE (HubSpot API en vivo) =====================
 with tab6:
-    st.subheader("👤 Reembolsos salvados por agente")
+    st.subheader("Reembolsos salvados por agente")
     st.caption("Fuente: HubSpot API en vivo · categoría FID- Rescate de reembolsos · "
                "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso'.")
 
@@ -532,9 +538,7 @@ with tab6:
         with cA:
             year = st.selectbox("Año", list(range(2026, hoy.year + 1)), index=0)
         with cB:
-            meses = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
-                     7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
-            month = st.selectbox("Mes", list(meses.keys()), format_func=lambda m: meses[m],
+            month = st.selectbox("Mes", list(MESES_ES.keys()), format_func=lambda m: MESES_ES[m],
                                  index=min(hoy.month - 1, 11))
         with cC:
             st.write("")
@@ -546,7 +550,7 @@ with tab6:
                 df_ag, resoluciones = hs_construir_tabla_agentes(token, year, month)
 
             if df_ag.empty:
-                st.info(f"No hay tickets de rescate cerrados en {meses[month]} {year}.")
+                st.info(f"No hay tickets de rescate cerrados en {MESES_ES[month]} {year}.")
             else:
                 total_asig = int(df_ag["Asignados"].sum())
                 total_salv = int(df_ag["Salvados"].sum())
@@ -563,7 +567,7 @@ with tab6:
                                "(ver instrucciones para el equipo). El conteo de salvados sí es correcto.")
 
                 # Calculadora de comisión
-                st.markdown("**💰 Cálculo de comisión por agente**")
+                st.markdown("**Cálculo de comisión por agente**")
                 pct = st.number_input("% de comisión sobre monto salvado", min_value=0.0, max_value=100.0,
                                       value=5.0, step=0.5, format="%.1f")
                 df_ag["Comisión USD"] = (df_ag["Monto salvado"] * pct / 100).round(2)
@@ -582,10 +586,9 @@ with tab6:
                              use_container_width=True, hide_index=True)
 
                 # Exportar para nómina
-                import io as _io
-                buf = _io.StringIO()
+                buf = io.StringIO()
                 df_ag[["Agente", "Asignados", "Salvados", "Monto salvado", "Comisión USD"]].to_csv(buf, index=False)
-                st.download_button(f"⬇️ Descargar comisiones {meses[month]} {year} (CSV)", buf.getvalue(),
+                st.download_button(f"⬇️ Descargar comisiones {MESES_ES[month]} {year} (CSV)", buf.getvalue(),
                                    file_name=f"comisiones_{year}_{month:02d}.csv", mime="text/csv")
 
                 with st.expander("Verificar: resoluciones encontradas este mes"):
@@ -604,7 +607,7 @@ with tab6:
 
 # ===================== TAB 1: RESUMEN =====================
 with tab1:
-    st.subheader(f"Resumen — {period.strftime('%B %Y').capitalize()}")
+    st.subheader(f"Resumen — {mes_es(period)}")
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Casos totales", n_casos_totales)
@@ -737,7 +740,7 @@ with tab3:
 
     # -------- Análisis histórico: ¿en qué motivos ganamos o perdemos? --------
     st.divider()
-    st.markdown("### 🎯 ¿En qué tipo de disputa ganamos o perdemos? (histórico completo)")
+    st.markdown("### ¿En qué tipo de disputa ganamos o perdemos?")
     st.caption("Cruce de motivo de disputa contra resultado, sobre TODAS las disputas cargadas (no solo el mes). "
                "Ayuda a decidir dónde reforzar evidencia o proceso.")
 
@@ -783,7 +786,7 @@ with tab3:
 
 # ===================== TAB 4: PENDIENTES URGENTES =====================
 with tab4:
-    st.subheader("🚨 Disputas que requieren acción de nuestro lado")
+    st.subheader("Disputas que requieren acción de nuestro lado")
     st.caption("`needs_response` = todavía no enviamos evidencia (acción nuestra, con fecha límite real). "
                "`under_review` = ya enviamos evidencia, esperando resolución del banco emisor (no es una tarea pendiente nuestra).")
 
@@ -824,7 +827,7 @@ with tab4:
     st.divider()
 
     # --- Esperando al banco: under_review (informativo, no es riesgo operativo nuestro) ---
-    st.subheader("🕒 Esperando resolución del banco emisor")
+    st.subheader("Esperando resolución del banco emisor")
     en_revision = df[df["Dispute Status"] == "under_review"].copy()
     en_revision["dias_en_espera"] = (hoy - en_revision["Dispute Date (UTC)"]).dt.days
     en_revision = en_revision.sort_values("dias_en_espera", ascending=False)

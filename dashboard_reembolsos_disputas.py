@@ -107,29 +107,62 @@ st.set_page_config(page_title="Opción Yo · Panel Financiero", layout="wide", p
                    initial_sidebar_state="collapsed")
 
 # ============================ SISTEMA DE DISEÑO ============================
-TEAL = "#0EA5B5"       # primario de marca
-TEAL_DK = "#0E7C86"    # teal profundo
-BLUE = "#2563EB"       # acento secundario
-RED = "#DC2626"        # riesgo / alerta
-GREEN = "#16A34A"      # positivo
-AMBER = "#D97706"      # advertencia
-INK = "#0F172A"        # texto principal
-SLATE = "#64748B"      # texto secundario
-LINE = "#E2E8F0"       # bordes
+# Selector de tema — el usuario elige, no se fuerza
+if "tema" not in st.session_state:
+    st.session_state.tema = "Claro"
+
+_tc1, _tc2 = st.columns([5, 1])
+with _tc2:
+    st.session_state.tema = st.selectbox("Tema", ["Claro", "Oscuro"],
+                                         index=0 if st.session_state.tema == "Claro" else 1,
+                                         label_visibility="collapsed")
+MODO = st.session_state.tema
+
+# Acentos de marca (constantes en ambos temas)
+TEAL = "#0EA5B5"
+TEAL_DK = "#0E7C86"
+BLUE = "#2563EB"
+RED = "#DC2626"
+GREEN = "#16A34A"
+AMBER = "#D97706"
+
+# Paletas que cambian según el tema elegido
+if MODO == "Oscuro":
+    BG = "#0B1220"        # fondo app
+    CARD = "#141C2B"      # tarjetas
+    INK = "#E8EEF6"       # texto principal
+    SLATE = "#94A3B8"     # texto secundario
+    LINE = "#243244"      # bordes
+    GRID = "#1E293B"      # grillas de gráficos
+else:
+    BG = "#F8FAFC"
+    CARD = "#FFFFFF"
+    INK = "#0F172A"
+    SLATE = "#64748B"
+    LINE = "#E2E8F0"
+    GRID = "#E2E8F0"
 
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
 
-.stApp {{ background: #F8FAFC; }}
+/* ---- Tema aplicado según selección del usuario ---- */
+.stApp, .main, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
+  background: {BG} !important;
+}}
+[data-testid="stSidebar"] {{ background: {CARD} !important; }}
+.stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+[data-testid="stMarkdownContainer"] {{ color: {INK} !important; }}
+[data-testid="stFileUploader"] section {{ background: {CARD} !important; border-color: {LINE} !important; }}
+
 html, body, [class*="css"] {{ font-family: 'Inter', -apple-system, sans-serif; }}
 
 /* Ocultar header/footer de Streamlit para look de producto */
-#MainMenu, footer, header {{ visibility: hidden; }}
-.block-container {{ padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1400px; }}
+#MainMenu, footer {{ visibility: hidden; }}
+.block-container {{ padding-top: 1rem; padding-bottom: 3rem; max-width: 1400px; }}
 
 /* Tipografía de títulos */
-h1, h2, h3 {{ font-family: 'Space Grotesk', sans-serif; color: {INK}; letter-spacing: -0.02em; }}
+h1, h2, h3 {{ font-family: 'Space Grotesk', sans-serif; color: {INK} !important; letter-spacing: -0.02em; }}
 h2 {{ font-size: 1.35rem !important; font-weight: 600 !important; margin-top: 0.5rem !important; }}
 h3 {{ font-size: 1.05rem !important; font-weight: 600 !important; }}
 
@@ -151,7 +184,7 @@ h3 {{ font-size: 1.05rem !important; font-weight: 600 !important; }}
 
 /* Métricas tipo tarjeta */
 [data-testid="stMetric"] {{
-  background: #fff; border: 1px solid {LINE}; border-radius: 14px;
+  background: {CARD}; border: 1px solid {LINE}; border-radius: 14px;
   padding: 18px 20px; box-shadow: 0 1px 3px rgba(15,23,42,0.04);
   border-left: 3px solid {TEAL};
 }}
@@ -171,7 +204,7 @@ h3 {{ font-size: 1.05rem !important; font-weight: 600 !important; }}
   font-weight: 600; font-size: 0.9rem; color: {SLATE};
   padding: 10px 16px; border-radius: 8px 8px 0 0;
 }}
-.stTabs [aria-selected="true"] {{ color: {TEAL_DK} !important; background: rgba(14,165,181,0.06); }}
+.stTabs [aria-selected="true"] {{ color: {TEAL} !important; background: rgba(14,165,181,0.10); }}
 .stTabs [data-baseweb="tab-highlight"] {{ background: {TEAL} !important; height: 3px; }}
 
 /* Tablas */
@@ -188,7 +221,7 @@ h3 {{ font-size: 1.05rem !important; font-weight: 600 !important; }}
 /* Divisores */
 hr {{ border-color: {LINE}; margin: 1.5rem 0; }}
 
-/* Cajas de alerta más suaves */
+/* Cajas de alerta */
 [data-testid="stAlert"] {{ border-radius: 12px; }}
 </style>
 """, unsafe_allow_html=True)
@@ -201,13 +234,13 @@ DISPUTE_STATUS_LABELS = {
     "under_review": "En revisión", "needs_response": "Necesita respuesta"
 }
 
-# Plantilla de estilo unificada para gráficos Plotly
+# Plantilla de estilo unificada para gráficos Plotly (se adapta al tema)
 PLOTLY_LAYOUT = dict(
     font=dict(family="Inter, sans-serif", size=13, color=INK),
     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
     margin=dict(t=30, b=30, l=10, r=10),
-    xaxis=dict(gridcolor=LINE, zerolinecolor=LINE),
-    yaxis=dict(gridcolor=LINE, zerolinecolor=LINE),
+    xaxis=dict(gridcolor=GRID, zerolinecolor=GRID),
+    yaxis=dict(gridcolor=GRID, zerolinecolor=GRID),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     colorway=[TEAL, BLUE, AMBER, GREEN, RED],
 )

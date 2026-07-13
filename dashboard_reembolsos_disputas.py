@@ -271,21 +271,32 @@ if "payments_df" not in st.session_state:
 # ------------------------------------------------------------------
 # CARGA AUTOMÁTICA DE DATOS (desde el repo — sin intervención del usuario)
 # ------------------------------------------------------------------
-DATA_DIR = Path(__file__).parent / "data"
-STRIPE_FILE = DATA_DIR / "stripe_pagos.csv.gz"
-FID_FILE = DATA_DIR / "fid_rescate.csv.gz"
+BASE_DIR = Path(__file__).parent
+
+def _buscar(nombres):
+    """Busca un archivo en varias ubicaciones posibles del repo."""
+    for carpeta in [BASE_DIR / "data", BASE_DIR, Path("data"), Path(".")]:
+        for n in nombres:
+            p = carpeta / n
+            if p.exists():
+                return p
+    return None
+
+STRIPE_FILE = _buscar(["stripe_pagos.csv.gz", "stripe_pagos.csv", "unified_payments.csv"])
+FID_FILE = _buscar(["fid_rescate.csv.gz", "fid_rescate.csv", "FID_rescate_maestro_v5.csv"])
 
 @st.cache_data(ttl=3600, show_spinner="Cargando datos...")
 def cargar_datos_repo(ruta, mtime):
     """Lee un CSV (.gz o plano) del repo. mtime fuerza recarga si el archivo cambia."""
-    return pd.read_csv(ruta, compression="gzip" if str(ruta).endswith(".gz") else None, low_memory=False)
+    ruta = Path(ruta)
+    return pd.read_csv(ruta, compression="gzip" if ruta.suffix == ".gz" else None, low_memory=False)
 
 # Cargar pagos de Stripe automáticamente
-if st.session_state.payments_df.empty and STRIPE_FILE.exists():
+if st.session_state.payments_df.empty and STRIPE_FILE is not None:
     try:
-        st.session_state.payments_df = cargar_datos_repo(STRIPE_FILE, STRIPE_FILE.stat().st_mtime)
+        st.session_state.payments_df = cargar_datos_repo(str(STRIPE_FILE), STRIPE_FILE.stat().st_mtime)
     except Exception as e:
-        st.error(f"No se pudieron cargar los datos de pagos: {e}")
+        st.error(f"El archivo existe pero no se pudo leer: {e}")
 
 # Uploader oculto — solo para actualizar los datos, no estorba a quien solo consulta
 with st.expander("Actualizar datos (solo para administradores)"):
@@ -304,11 +315,26 @@ with st.expander("Actualizar datos (solo para administradores)"):
         if dupes:
             st.toast(f"{dupes} filas duplicadas por 'id' fueron ignoradas.")
 
+    # Diagnóstico: qué archivos ve realmente el servidor
+    with st.expander("Diagnóstico de archivos"):
+        st.write(f"**Carpeta de la app:** `{BASE_DIR}`")
+        st.write(f"**Archivo de pagos detectado:** `{STRIPE_FILE}`" if STRIPE_FILE else "**Archivo de pagos:** no encontrado")
+        st.write(f"**Archivo de rescates detectado:** `{FID_FILE}`" if FID_FILE else "**Archivo de rescates:** no encontrado")
+        raiz = sorted([p.name for p in BASE_DIR.iterdir()]) if BASE_DIR.exists() else []
+        st.write("**Archivos en la raíz del repo:**")
+        st.code("\n".join(raiz) or "(vacío)")
+        carpeta_data = BASE_DIR / "data"
+        if carpeta_data.exists():
+            st.write("**Archivos en `data/`:**")
+            st.code("\n".join(sorted(p.name for p in carpeta_data.iterdir())) or "(vacía)")
+        else:
+            st.warning("La carpeta `data/` no existe en el repositorio.")
+
 df = st.session_state.payments_df.copy()
 
 if df.empty:
-    st.warning("No se encontraron datos de pagos. Verifica que exista el archivo `data/stripe_pagos.csv.gz` "
-               "en el repositorio, o súbelo manualmente desde la sección de arriba.")
+    st.warning("**No se encontraron los datos de pagos.** Abre *Actualizar datos → Diagnóstico de archivos* "
+               "para ver qué archivos detecta el servidor, o sube el CSV manualmente.")
     st.stop()
 
 for c in DATE_COLS:
@@ -373,11 +399,11 @@ with tab7:
 
     # Carga automática del archivo de rescates desde el repo
     fid = None
-    if FID_FILE.exists():
+    if FID_FILE is not None:
         try:
-            fid = cargar_datos_repo(FID_FILE, FID_FILE.stat().st_mtime)
+            fid = cargar_datos_repo(str(FID_FILE), FID_FILE.stat().st_mtime)
         except Exception as e:
-            st.error(f"No se pudo cargar el archivo de rescates: {e}")
+            st.error(f"El archivo de rescates existe pero no se pudo leer: {e}")
 
     # Uploader oculto — solo para administradores que quieran actualizar
     with st.expander("Actualizar datos de rescates (solo administradores)"):

@@ -410,18 +410,17 @@ with tab7:
                 sub = fid
                 etiqueta = "YTD_" + (meses_disp[0][:4] if meses_disp else "2026")
 
-            # ---------- REGLA DE NEGOCIO: las disputas NO son comisionables ----------
-            # Las disputas las gestiona Admin directamente, no pasan por el agente.
-            # Un caso salvado que terminó en disputa NO genera comisión para el asesor.
-            col_disputa = "Fue a disputa" if "Fue a disputa" in fid.columns else None
-            if col_disputa:
-                fid["_fue_disputa"] = fid[col_disputa].astype(str).str.strip().str.lower().isin(["sí", "si", "yes", "true"])
+            # ---------- REGLA DE NEGOCIO: comisionable = rescate verificado cargo por cargo ----------
+            # Un caso solo comisiona si: (a) el cargo que se salvó SIGUE pagado en Stripe, y
+            # (b) NO terminó en disputa (las disputas las gestiona Admin, no el asesor).
+            if "Comisionable" in fid.columns:
+                fid["_comisionable"] = fid["_salvado"] & fid["Comisionable"].astype(str).str.strip().str.lower().isin(["sí", "si", "yes", "true"])
+                fid["_fue_disputa"] = fid.get("Fue a disputa", pd.Series("No", index=fid.index)).astype(str).str.strip().str.lower().isin(["sí", "si", "yes", "true"])
             else:
+                fid["_comisionable"] = fid["_salvado"]
                 fid["_fue_disputa"] = False
-                st.warning("⚠️ El CSV no trae la columna **Fue a disputa**. No se pueden excluir los casos "
-                           "gestionados por Admin. Usa el CSV maestro actualizado para un cálculo correcto.")
-
-            fid["_comisionable"] = fid["_salvado"] & (~fid["_fue_disputa"])
+                st.warning("⚠️ El CSV no trae la columna **Comisionable**. No se pueden excluir disputas ni rescates "
+                           "fallidos. Usa el CSV maestro auditado (v4) para un cálculo correcto.")
 
             # recalcular el subconjunto del periodo con las nuevas banderas
             if modo == "Un mes":
@@ -436,12 +435,14 @@ with tab7:
                          f"con reembolso en Stripe. Pagar comisión por ellos = pagar de más.")
                 excluir_contra = st.checkbox("Excluir casos contradictorios del cálculo de comisión", value=True)
 
-            n_disputa = int(sub["_salvado"].sum() - sub["_comisionable"].sum())
-            if n_disputa > 0:
-                monto_disputa = sub.loc[sub["_salvado"] & sub["_fue_disputa"], "_monto"].sum()
-                st.info(f"ℹ️ **{n_disputa} caso(s) salvado(s) terminaron en disputa (${monto_disputa:,.2f}).** "
-                        "No se comisionan: las disputas las gestiona Admin directamente, no el asesor. "
-                        "Ya están excluidos del cálculo de abajo.")
+            n_excluidos = int(sub["_salvado"].sum() - sub["_comisionable"].sum())
+            if n_excluidos > 0 and "Estado del rescate" in sub.columns:
+                detalle = sub.loc[sub["_salvado"] & ~sub["_comisionable"], "Estado del rescate"].value_counts()
+                motivos = " · ".join(f"{v} {k.lower()}" for k, v in detalle.items())
+                monto_excl = sub.loc[sub["_salvado"] & ~sub["_comisionable"], "_monto"].sum()
+                st.info(f"ℹ️ **{n_excluidos} caso(s) salvado(s) NO comisionan (${monto_excl:,.2f}):** {motivos}. "
+                        "Las disputas las gestiona Admin (no el asesor), y un rescate que terminó reembolsado no fue efectivo. "
+                        "Verificado cargo por cargo contra Stripe.")
 
             def _agrupar(df):
                 if excluir_contra and not contradictorios.empty:
@@ -449,7 +450,7 @@ with tab7:
                 g = df.groupby("_agente").apply(lambda x: pd.Series({
                     "Asignados": len(x),
                     "Salvados": int(x["_salvado"].sum()),
-                    "En disputa (no paga)": int((x["_salvado"] & x["_fue_disputa"]).sum()),
+                    "No comisionan": int((x["_salvado"] & ~x["_comisionable"]).sum()),
                     "Comisionables": int(x["_comisionable"].sum()),
                     "Monto salvado": float(x.loc[x["_salvado"], "_monto"].sum()),
                     "Monto comisionable": float(x.loc[x["_comisionable"], "_monto"].sum()),
@@ -462,7 +463,7 @@ with tab7:
             t1, t2, t3, t4, t5 = st.columns(5)
             t1.metric("Tickets", int(g["Asignados"].sum()))
             t2.metric("Salvados", int(g["Salvados"].sum()))
-            t3.metric("En disputa (no paga)", int(g["En disputa (no paga)"].sum()))
+            t3.metric("No comisionan", int(g["No comisionan"].sum()))
             t4.metric("Comisionables", int(g["Comisionables"].sum()))
             t5.metric("Monto comisionable", f"${g['Monto comisionable'].sum():,.0f}")
             st.caption("La comisión se calcula **solo sobre el monto comisionable** — excluye los casos que "
@@ -490,7 +491,7 @@ with tab7:
 
             fig = go.Figure()
             fig.add_bar(x=g["Agente"], y=g["Comisionables"], name="Comisionables", marker_color=TEAL)
-            fig.add_bar(x=g["Agente"], y=g["En disputa (no paga)"], name="En disputa (no paga)", marker_color=AMBER)
+            fig.add_bar(x=g["Agente"], y=g["No comisionan"], name="No comisionan (disputa o falló)", marker_color=AMBER)
             fig.update_layout(**PLOTLY_LAYOUT, barmode="stack", height=400, yaxis_title="Casos salvados")
             st.plotly_chart(fig, use_container_width=True)
 
@@ -498,7 +499,7 @@ with tab7:
             show["Tasa %"] = show["Tasa %"].astype(str) + "%"
             for c in ["Monto salvado", "Monto comisionable", "Comisión USD"]:
                 show[c] = show[c].apply(lambda x: f"${x:,.2f}")
-            cols_show = ["Agente", "Asignados", "Salvados", "En disputa (no paga)", "Comisionables",
+            cols_show = ["Agente", "Asignados", "Salvados", "No comisionan", "Comisionables",
                          "Monto comisionable", "Comisión USD"]
             if "% aplicado" in show.columns:
                 show["% aplicado"] = show["% aplicado"].astype(str) + "%"
@@ -520,8 +521,8 @@ with tab7:
             if excluir_contra and not contradictorios.empty:
                 salvados_det = salvados_det[~salvados_det.index.isin(contradictorios.index)]
 
-            cols_det = [c for c in [col_contact, col_reso, col_monto, "Fue a disputa", "Estado de disputa",
-                                    "Reembolsado en Stripe", col_fecha]
+            cols_det = [c for c in [col_contact, col_reso, col_monto, "Estado del rescate", "Cargo salvado (fecha)",
+                                    "Estado de disputa", col_fecha]
                         if c in salvados_det.columns]
             agentes_orden = g.sort_values("Comisionables", ascending=False)["Agente"].tolist()
 
@@ -529,12 +530,12 @@ with tab7:
                 filas_ag = salvados_det[salvados_det["_agente"] == ag]
                 if filas_ag.empty:
                     continue
-                comis_ag = filas_ag[~filas_ag["_fue_disputa"]]
+                comis_ag = filas_ag[filas_ag["_comisionable"]]
                 monto_ag = comis_ag["_monto"].sum()
-                n_disp_ag = int(filas_ag["_fue_disputa"].sum())
+                n_disp_ag = int((~filas_ag["_comisionable"]).sum())
                 titulo = f"{ag} · {len(comis_ag)} comisionables · ${monto_ag:,.2f}"
                 if n_disp_ag:
-                    titulo += f"  (+{n_disp_ag} en disputa, no paga)"
+                    titulo += f"  (+{n_disp_ag} no comisionan)"
                 with st.expander(titulo):
                     tabla_det = filas_ag[cols_det].copy()
                     rename_map = {col_contact: "Cliente", col_reso: "Resolución",

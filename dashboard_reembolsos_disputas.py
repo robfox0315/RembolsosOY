@@ -101,6 +101,7 @@ def hs_construir_tabla_agentes(token, year, month):
     return df, resoluciones
 
 from datetime import datetime, timedelta
+from pathlib import Path
 import io
 import re
 
@@ -262,29 +263,52 @@ st.markdown(f"""
   <div class="subtitle">Stripe + HubSpot · datos validados contra la fuente</div>
 </div>
 """, unsafe_allow_html=True)
-st.caption("Sube el CSV de pagos de Stripe (unified_payments). Se acumulan varios archivos sin duplicar por ID.")
+st.caption("Datos actualizados automáticamente · Stripe (pagos) + HubSpot (rescates) · verificados cargo por cargo.")
 
 if "payments_df" not in st.session_state:
     st.session_state.payments_df = pd.DataFrame()
 
-uploaded = st.file_uploader("Cargar CSV de pagos", type="csv", accept_multiple_files=True)
+# ------------------------------------------------------------------
+# CARGA AUTOMÁTICA DE DATOS (desde el repo — sin intervención del usuario)
+# ------------------------------------------------------------------
+DATA_DIR = Path(__file__).parent / "data"
+STRIPE_FILE = DATA_DIR / "stripe_pagos.csv.gz"
+FID_FILE = DATA_DIR / "fid_rescate.csv.gz"
 
-if uploaded:
-    frames = [st.session_state.payments_df] if not st.session_state.payments_df.empty else []
-    for f in uploaded:
-        frames.append(pd.read_csv(f))
-    combined = pd.concat(frames, ignore_index=True)
-    before = len(combined)
-    combined = combined.drop_duplicates(subset="id", keep="last")
-    st.session_state.payments_df = combined
-    dupes = before - len(combined)
-    if dupes:
-        st.toast(f"{dupes} filas duplicadas por 'id' fueron ignoradas.")
+@st.cache_data(ttl=3600, show_spinner="Cargando datos...")
+def cargar_datos_repo(ruta, mtime):
+    """Lee un CSV (.gz o plano) del repo. mtime fuerza recarga si el archivo cambia."""
+    return pd.read_csv(ruta, compression="gzip" if str(ruta).endswith(".gz") else None, low_memory=False)
+
+# Cargar pagos de Stripe automáticamente
+if st.session_state.payments_df.empty and STRIPE_FILE.exists():
+    try:
+        st.session_state.payments_df = cargar_datos_repo(STRIPE_FILE, STRIPE_FILE.stat().st_mtime)
+    except Exception as e:
+        st.error(f"No se pudieron cargar los datos de pagos: {e}")
+
+# Uploader oculto — solo para actualizar los datos, no estorba a quien solo consulta
+with st.expander("Actualizar datos (solo para administradores)"):
+    st.caption("Los datos se cargan automáticamente desde el repositorio. "
+               "Sube un CSV nuevo solo si necesitas incorporar información más reciente.")
+    uploaded = st.file_uploader("Cargar CSV de pagos (Stripe)", type=["csv", "gz"], accept_multiple_files=True)
+    if uploaded:
+        frames = [st.session_state.payments_df] if not st.session_state.payments_df.empty else []
+        for f in uploaded:
+            frames.append(pd.read_csv(f, compression="gzip" if f.name.endswith(".gz") else None, low_memory=False))
+        combined = pd.concat(frames, ignore_index=True)
+        before = len(combined)
+        combined = combined.drop_duplicates(subset="id", keep="last")
+        st.session_state.payments_df = combined
+        dupes = before - len(combined)
+        if dupes:
+            st.toast(f"{dupes} filas duplicadas por 'id' fueron ignoradas.")
 
 df = st.session_state.payments_df.copy()
 
 if df.empty:
-    st.info("Carga el archivo unified_payments.csv para comenzar.")
+    st.warning("No se encontraron datos de pagos. Verifica que exista el archivo `data/stripe_pagos.csv.gz` "
+               "en el repositorio, o súbelo manualmente desde la sección de arriba.")
     st.stop()
 
 for c in DATE_COLS:
@@ -308,7 +332,10 @@ all_months = sorted(set(
 
 c1, c2 = st.columns([1, 2])
 with c1:
-    mes_sel = st.selectbox("Mes de análisis", all_months, index=0)
+    # Por defecto abre en el último mes COMPLETO (el mes en curso está incompleto y engaña)
+    mes_actual = pd.Timestamp.now().to_period("M").strftime("%Y-%m")
+    idx_def = next((i for i, m in enumerate(all_months) if m != mes_actual), 0)
+    mes_sel = st.selectbox("Mes de análisis", all_months, index=idx_def)
 with c2:
     st.caption("Un reembolso/disputa se asigna al mes en que **ocurrió** (fecha de reembolso / fecha de disputa), no al mes del cobro original.")
 
@@ -339,29 +366,41 @@ tab1, tab2, tab3, tab6, tab7, tab4, tab5 = st.tabs([
 
 # ===================== TAB 7: COMISIONES POR CSV (sin token) =====================
 with tab7:
-    st.subheader("Comisiones por rescate — desde export de HubSpot")
-    st.caption("Sube el export del pipeline FID- Rescate de reembolsos. No requiere token. "
-               "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso'.")
+    st.subheader("Comisiones por rescate")
+    st.caption("Datos auditados: cada rescate verificado cargo por cargo contra Stripe. "
+               "Salvado = 'Reembolso rechazado' + 'Resuelto exitoso'. "
+               "No comisionan las disputas (las gestiona Admin) ni los rescates que no se sostuvieron.")
 
-    cU1, cU2 = st.columns(2)
-    with cU1:
-        f_fid = st.file_uploader("CSV de tickets FID- Rescate de reembolsos", type="csv", key="fid_csv")
-    with cU2:
-        f_stripe_c = st.file_uploader("CSV de Stripe (opcional, para detectar contradicciones)", type="csv", key="stripe_com")
+    # Carga automática del archivo de rescates desde el repo
+    fid = None
+    if FID_FILE.exists():
+        try:
+            fid = cargar_datos_repo(FID_FILE, FID_FILE.stat().st_mtime)
+        except Exception as e:
+            st.error(f"No se pudo cargar el archivo de rescates: {e}")
 
-    with st.expander("📋 Cómo exportar el CSV del FID correctamente"):
+    # Uploader oculto — solo para administradores que quieran actualizar
+    with st.expander("Actualizar datos de rescates (solo administradores)"):
+        st.caption("Los datos se cargan automáticamente desde el repositorio.")
+        cU1, cU2 = st.columns(2)
+        with cU1:
+            f_fid = st.file_uploader("CSV de tickets FID- Rescate", type=["csv", "gz"], key="fid_csv")
+        with cU2:
+            f_stripe_c = st.file_uploader("CSV de Stripe (para detectar contradicciones)", type=["csv", "gz"], key="stripe_com")
         st.markdown("""
-1. En HubSpot: **CRM → Tickets**
-2. Filtra por **Categoría del ticket = `FID- Rescate de reembolsos`**
-3. **Exportar** (arriba a la derecha)
-4. Incluye: **Propietario del ticket**, **Resolución**, **Fecha de cierre**, **Monto de reembolso**, **Associated Contact**
-5. Sube el CSV aquí
+**Cómo exportar el CSV del FID:** HubSpot → CRM → Tickets → filtrar por Categoría =
+`FID- Rescate de reembolsos` → Exportar, incluyendo: Propietario del ticket, Resolución,
+Fecha de cierre, Monto de reembolso y Associated Contact.
 """)
 
-    if not f_fid:
-        st.info("Sube el CSV del pipeline FID para calcular comisiones por agente.")
+    if f_fid is not None:
+        fid = pd.read_csv(f_fid, compression="gzip" if f_fid.name.endswith(".gz") else None)
+
+    if fid is None or fid.empty:
+        st.warning("No se encontraron datos de rescates. Verifica que exista `data/fid_rescate.csv.gz` "
+                   "en el repositorio, o súbelo desde la sección de arriba.")
     else:
-        fid = pd.read_csv(f_fid)
+        fid = fid.copy()
         col_agente, col_reso, col_fecha, col_monto, col_contact = \
             "Propietario del ticket", "Resolución", "Fecha de cierre", "Monto de reembolso", "Associated Contact"
 
@@ -386,8 +425,8 @@ with tab7:
 
             # ---------- #4: detección de contradictorios con Stripe ----------
             contradictorios = pd.DataFrame()
-            if f_stripe_c is not None and col_contact in fid.columns:
-                pay_c = pd.read_csv(f_stripe_c)
+            if col_contact in fid.columns:
+                pay_c = pd.read_csv(f_stripe_c, compression="gzip" if f_stripe_c.name.endswith(".gz") else None) if f_stripe_c is not None else df
                 if "Customer Email" in pay_c.columns and "Amount Refunded" in pay_c.columns:
                     def _mail(s):
                         m = re.search(r"\(([^)]+@[^)]+)\)", str(s))

@@ -142,6 +142,8 @@ if MODO == "Oscuro":
     SLATE = "#94A3B8"     # texto secundario
     LINE = "#243244"      # bordes
     GRID = "#1E293B"      # grillas de gráficos
+    TRACK = "#1E293B"     # fondo de barras de progreso
+    HOVER = "rgba(14,165,181,0.10)"
 else:
     BG = "#F8FAFC"
     CARD = "#FFFFFF"
@@ -149,88 +151,101 @@ else:
     SLATE = "#64748B"
     LINE = "#E2E8F0"
     GRID = "#E2E8F0"
+    TRACK = "#EEF2F6"
+    HOVER = "rgba(14,165,181,0.07)"
 
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap');
 
-/* ---- Tema aplicado según selección del usuario ---- */
-.stApp, .main, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
-  background: {BG} !important;
-}}
-[data-testid="stSidebar"] {{ background: {CARD} !important; }}
+/* ============ BASE ============ */
+.stApp, .main, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{ background: {BG} !important; }}
 .stApp, .stApp p, .stApp span, .stApp label, .stApp li,
 [data-testid="stMarkdownContainer"] {{ color: {INK} !important; }}
-[data-testid="stFileUploader"] section {{ background: {CARD} !important; border-color: {LINE} !important; }}
-
-html, body, [class*="css"] {{ font-family: 'Inter', -apple-system, sans-serif; }}
-
-/* Ocultar footer de Streamlit; se conserva el header con el menú de Settings */
+html, body, [class*="css"] {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }}
 #MainMenu, footer {{ visibility: hidden; }}
-.block-container {{ padding-top: 1rem; padding-bottom: 3rem; max-width: 1400px; }}
+.block-container {{ padding-top: 1.2rem; padding-bottom: 4rem; max-width: 1320px; }}
 
-/* Tipografía de títulos */
-h1, h2, h3 {{ font-family: 'Space Grotesk', sans-serif; color: {INK} !important; letter-spacing: -0.02em; }}
-h2 {{ font-size: 1.35rem !important; font-weight: 600 !important; margin-top: 0.5rem !important; }}
-h3 {{ font-size: 1.05rem !important; font-weight: 600 !important; }}
+/* ============ TIPOGRAFÍA ============ */
+h1, h2, h3 {{ font-family: 'Space Grotesk', sans-serif; color: {INK} !important;
+  letter-spacing: -0.025em; font-weight: 600; }}
+h2 {{ font-size: 1.4rem !important; margin: 0.6rem 0 0.2rem !important; }}
+h3 {{ font-size: 1.08rem !important; }}
 
-/* Header de marca */
-.brand-header {{
-  background: linear-gradient(135deg, {TEAL_DK} 0%, {TEAL} 100%);
-  border-radius: 16px; padding: 26px 32px; margin-bottom: 22px;
-  box-shadow: 0 10px 30px -12px rgba(14,124,134,0.45);
+/* ============ ENCABEZADO ============ */
+.hero {{
+  background: linear-gradient(120deg, {TEAL_DK} 0%, {TEAL} 62%, #34C7D4 100%);
+  border-radius: 20px; padding: 30px 36px; margin-bottom: 26px;
+  box-shadow: 0 18px 40px -20px rgba(14,124,134,0.55);
 }}
-.brand-header .eyebrow {{
-  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
-  color: rgba(255,255,255,0.78); margin-bottom: 6px;
-}}
-.brand-header .title {{
-  font-family: 'Space Grotesk', sans-serif; font-size: 1.75rem; font-weight: 700;
-  color: #fff; letter-spacing: -0.02em; line-height: 1.15;
-}}
-.brand-header .subtitle {{ color: rgba(255,255,255,0.85); font-size: 0.9rem; margin-top: 4px; }}
+.hero-eyebrow {{ font-size: 0.7rem; font-weight: 600; letter-spacing: 0.2em;
+  text-transform: uppercase; color: rgba(255,255,255,0.75); margin-bottom: 8px; }}
+.hero-title {{ font-family: 'Space Grotesk', sans-serif; font-size: 1.95rem; font-weight: 700;
+  color: #fff; letter-spacing: -0.03em; line-height: 1.1; margin: 0; }}
+.hero-sub {{ color: rgba(255,255,255,0.88); font-size: 0.92rem; margin-top: 7px; font-weight: 400; }}
 
-/* Métricas tipo tarjeta */
+/* ============ TARJETAS KPI ============ */
 [data-testid="stMetric"] {{
-  background: {CARD}; border: 1px solid {LINE}; border-radius: 14px;
-  padding: 18px 20px; box-shadow: 0 1px 3px rgba(15,23,42,0.04);
-  border-left: 3px solid {TEAL};
+  background: {CARD}; border: 1px solid {LINE}; border-radius: 16px;
+  padding: 22px 24px; box-shadow: 0 2px 8px rgba(15,23,42,0.05);
+  transition: box-shadow .18s ease, transform .18s ease;
 }}
+[data-testid="stMetric"]:hover {{ box-shadow: 0 8px 22px -8px rgba(15,23,42,0.16); transform: translateY(-1px); }}
 [data-testid="stMetricLabel"] p {{
-  font-size: 0.75rem !important; font-weight: 600 !important; color: {SLATE} !important;
-  text-transform: uppercase; letter-spacing: 0.04em;
-}}
+  font-size: 0.7rem !important; font-weight: 600 !important; color: {SLATE} !important;
+  text-transform: uppercase; letter-spacing: 0.08em; }}
 [data-testid="stMetricValue"] {{
   font-family: 'Space Grotesk', sans-serif !important; color: {INK} !important;
-  font-weight: 700 !important; font-variant-numeric: tabular-nums;
-}}
-[data-testid="stMetricDelta"] {{ font-weight: 600 !important; }}
+  font-weight: 700 !important; font-size: 2.1rem !important;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }}
 
-/* Tabs refinadas */
-.stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid {LINE}; }}
-.stTabs [data-baseweb="tab"] {{
-  font-weight: 600; font-size: 0.9rem; color: {SLATE};
-  padding: 10px 16px; border-radius: 8px 8px 0 0;
+/* ============ BARRA DE RESCATE (elemento distintivo) ============ */
+.rescue-panel {{
+  background: {CARD}; border: 1px solid {LINE}; border-radius: 18px;
+  padding: 26px 30px; margin: 6px 0 22px;
+  box-shadow: 0 2px 10px rgba(15,23,42,0.05);
 }}
-.stTabs [aria-selected="true"] {{ color: {TEAL} !important; background: rgba(14,165,181,0.10); }}
+.rescue-head {{ display:flex; justify-content:space-between; align-items:baseline;
+  margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }}
+.rescue-label {{ font-size: 0.72rem; font-weight: 600; letter-spacing: 0.09em;
+  text-transform: uppercase; color: {SLATE}; }}
+.rescue-pct {{ font-family:'Space Grotesk',sans-serif; font-size: 2.6rem; font-weight: 700;
+  color: {TEAL_DK}; line-height: 1; letter-spacing: -0.03em; }}
+.rescue-ctx {{ font-size: 0.88rem; color: {SLATE}; }}
+.rescue-track {{ height: 15px; background: {TRACK}; border-radius: 99px; overflow: hidden; display:flex; }}
+.rescue-fill {{ background: linear-gradient(90deg, {TEAL_DK}, {TEAL}); height: 100%; }}
+.rescue-fill-soft {{ background: {AMBER}; opacity: .5; height: 100%; }}
+.rescue-legend {{ display:flex; gap: 22px; margin-top: 14px; flex-wrap: wrap; }}
+.rescue-legend div {{ display:flex; align-items:center; gap: 7px; font-size: 0.83rem; color: {SLATE}; }}
+.dot {{ width: 9px; height: 9px; border-radius: 3px; display:inline-block; }}
+
+/* Barra por agente */
+.agent-row {{ display:grid; grid-template-columns: 170px 1fr 96px; align-items:center;
+  gap: 14px; padding: 9px 0; border-bottom: 1px solid {LINE}; }}
+.agent-row:last-child {{ border-bottom: none; }}
+.agent-name {{ font-size: 0.9rem; font-weight: 500; color: {INK}; }}
+.agent-track {{ height: 10px; background: {TRACK}; border-radius: 99px; overflow: hidden; }}
+.agent-fill {{ height: 100%; background: linear-gradient(90deg, {TEAL_DK}, {TEAL}); border-radius: 99px; }}
+.agent-val {{ font-family:'Space Grotesk',sans-serif; font-weight: 600; font-size: 0.95rem;
+  color: {INK}; text-align: right; font-variant-numeric: tabular-nums; }}
+
+/* ============ PESTAÑAS ============ */
+.stTabs [data-baseweb="tab-list"] {{ gap: 2px; border-bottom: 1px solid {LINE}; }}
+.stTabs [data-baseweb="tab"] {{ font-weight: 500; font-size: 0.92rem; color: {SLATE};
+  padding: 12px 18px; border-radius: 10px 10px 0 0; }}
+.stTabs [data-baseweb="tab"]:hover {{ background: {HOVER}; }}
+.stTabs [aria-selected="true"] {{ color: {TEAL_DK} !important; font-weight: 600; background: {HOVER}; }}
 .stTabs [data-baseweb="tab-highlight"] {{ background: {TEAL} !important; height: 3px; }}
 
-/* Tablas */
-[data-testid="stDataFrame"] {{ border: 1px solid {LINE}; border-radius: 12px; overflow: hidden; }}
-
-/* Botones */
-.stButton button, .stDownloadButton button {{
-  border-radius: 10px; font-weight: 600; border: 1px solid {LINE};
-  transition: all 0.15s ease;
-}}
+/* ============ CONTROLES ============ */
+.stButton button, .stDownloadButton button {{ border-radius: 11px; font-weight: 600;
+  border: 1px solid {LINE}; padding: 0.5rem 1.1rem; }}
 .stDownloadButton button {{ background: {TEAL_DK}; color: #fff; border: none; }}
 .stDownloadButton button:hover {{ background: {TEAL}; }}
-
-/* Divisores */
-hr {{ border-color: {LINE}; margin: 1.5rem 0; }}
-
-/* Cajas de alerta */
-[data-testid="stAlert"] {{ border-radius: 12px; }}
+[data-testid="stDataFrame"] {{ border: 1px solid {LINE}; border-radius: 14px; overflow: hidden; }}
+[data-testid="stAlert"] {{ border-radius: 13px; border: none; }}
+hr {{ border-color: {LINE}; margin: 1.6rem 0; }}
+[data-testid="stExpander"] {{ border: 1px solid {LINE}; border-radius: 13px; background: {CARD}; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -257,13 +272,12 @@ PLOTLY_LAYOUT = dict(
 # HEADER DE MARCA
 # ------------------------------------------------------------------
 st.markdown(f"""
-<div class="brand-header">
-  <div class="eyebrow">Opción Yo · Operaciones</div>
-  <div class="title">Panel Financiero — Reembolsos, Disputas y Rescate</div>
-  <div class="subtitle">Stripe + HubSpot · datos validados contra la fuente</div>
+<div class="hero">
+  <div class="hero-eyebrow">Opción Yo · Operaciones</div>
+  <div class="hero-title">Panel Financiero</div>
+  <div class="hero-sub">Reembolsos, disputas y rescate de clientes · datos verificados contra Stripe y HubSpot</div>
 </div>
 """, unsafe_allow_html=True)
-st.caption("Datos actualizados automáticamente · Stripe (pagos) + HubSpot (rescates) · verificados cargo por cargo.")
 
 if "payments_df" not in st.session_state:
     st.session_state.payments_df = pd.DataFrame()
@@ -459,7 +473,9 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
             meses_disp = sorted(fid["_mes"].dropna().unique(), reverse=True)
             modo = st.radio("Periodo", ["Un mes", "Acumulado del año (YTD)"], horizontal=True)
             if modo == "Un mes":
-                mes_sel = st.selectbox("Mes a liquidar", meses_disp)
+                _mes_hoy = pd.Timestamp.now().to_period("M").strftime("%Y-%m")
+                _idx = next((i for i, m in enumerate(meses_disp) if m != _mes_hoy), 0)
+                mes_sel = st.selectbox("Mes a liquidar", meses_disp, index=_idx)
                 sub = fid[fid["_mes"] == mes_sel]
                 etiqueta = mes_sel
             else:
@@ -511,6 +527,38 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
 
             g = _agrupar(sub)
 
+            # ---------- PANEL DE TASA DE RESCATE (visual, comprensible sin explicación) ----------
+            n_gest = int(g["Asignados"].sum())
+            n_resc = int(g["Salvados"].sum())
+            n_efec = int(g["Comisionables"].sum())
+            tasa_resc = n_resc / n_gest * 100 if n_gest else 0
+            tasa_efec = n_efec / n_gest * 100 if n_gest else 0
+            pct_perdidos = 100 - tasa_resc
+
+            st.markdown(f"""
+<div class="rescue-panel">
+  <div class="rescue-head">
+    <div>
+      <div class="rescue-label">Tasa de rescate</div>
+      <div class="rescue-pct">{tasa_resc:.0f}%</div>
+    </div>
+    <div class="rescue-ctx">
+      De <b>{n_gest}</b> solicitudes de reembolso gestionadas, el equipo evitó <b>{n_resc}</b>.<br>
+      <b>{n_efec}</b> se sostuvieron en el tiempo y generan comisión ({tasa_efec:.0f}% del total).
+    </div>
+  </div>
+  <div class="rescue-track">
+    <div class="rescue-fill" style="width:{tasa_efec:.1f}%"></div>
+    <div class="rescue-fill-soft" style="width:{tasa_resc - tasa_efec:.1f}%"></div>
+  </div>
+  <div class="rescue-legend">
+    <div><span class="dot" style="background:{TEAL_DK}"></span> Rescate efectivo — {n_efec} casos</div>
+    <div><span class="dot" style="background:{AMBER};opacity:.5"></span> Rescatado pero no comisiona — {n_resc - n_efec} casos</div>
+    <div><span class="dot" style="background:{TRACK}"></span> Reembolso concedido — {n_gest - n_resc} casos</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
             t1, t2, t3, t4, t5 = st.columns(5)
             t1.metric("Tickets", int(g["Asignados"].sum()))
             t2.metric("Salvados", int(g["Salvados"].sum()))
@@ -540,11 +588,23 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
                 g["Comisión USD"] = (g["Monto comisionable"] * g["% aplicado"] / 100).round(2)
                 st.caption(f"Se aplica {pct_alto}% a quienes superan {umbral:,.0f} en '{base_criterio}', {pct_base}% al resto.")
 
-            fig = go.Figure()
-            fig.add_bar(x=g["Agente"], y=g["Comisionables"], name="Comisionables", marker_color=TEAL)
-            fig.add_bar(x=g["Agente"], y=g["No comisionan"], name="No comisionan (disputa o falló)", marker_color=AMBER)
-            fig.update_layout(**PLOTLY_LAYOUT, barmode="stack", height=400, yaxis_title="Casos salvados")
-            st.plotly_chart(fig, use_container_width=True)
+            # ---------- TASA DE RESCATE POR ASESOR (barras limpias) ----------
+            st.markdown("### Tasa de rescate por asesor")
+            st.caption("De cada 100 solicitudes que gestionó, cuántas logró rescatar de forma efectiva.")
+
+            ranking = g[g["Asignados"] > 0].copy()
+            ranking["tasa_ef"] = (ranking["Comisionables"] / ranking["Asignados"] * 100).round(1)
+            ranking = ranking.sort_values("tasa_ef", ascending=False)
+
+            filas_html = ""
+            for _, a in ranking.iterrows():
+                filas_html += f"""<div class="agent-row">
+  <div class="agent-name">{a['Agente']}</div>
+  <div class="agent-track"><div class="agent-fill" style="width:{a['tasa_ef']:.0f}%"></div></div>
+  <div class="agent-val">{a['tasa_ef']:.0f}% <span style="color:{SLATE};font-weight:400;font-size:.8rem">({int(a['Comisionables'])}/{int(a['Asignados'])})</span></div>
+</div>"""
+            st.markdown(f'<div class="rescue-panel">{filas_html}</div>', unsafe_allow_html=True)
+            st.caption("Los asesores con pocos casos pueden mostrar porcentajes extremos: revisa siempre el número entre paréntesis.")
 
             show = g.copy()
             show["Tasa %"] = show["Tasa %"].astype(str) + "%"

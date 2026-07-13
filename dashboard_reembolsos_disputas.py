@@ -449,20 +449,11 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
                 st.warning("⚠️ El CSV no trae **Monto de reembolso** — el monto y la comisión saldrán en $0. "
                            "Reexporta con esa columna para calcular pagos.")
 
-            # ---------- #4: detección de contradictorios con Stripe ----------
+            # La verificación de rescates se hace cargo por cargo (columna "Comisionable" del
+            # archivo auditado): es la fuente única de verdad. Se eliminó la detección antigua
+            # por email, que generaba falsos positivos al mirar cualquier reembolso histórico
+            # del cliente en lugar del cargo específico que el asesor rescató.
             contradictorios = pd.DataFrame()
-            if col_contact in fid.columns:
-                pay_c = pd.read_csv(f_stripe_c, compression="gzip" if f_stripe_c.name.endswith(".gz") else None) if f_stripe_c is not None else df
-                if "Customer Email" in pay_c.columns and "Amount Refunded" in pay_c.columns:
-                    def _mail(s):
-                        m = re.search(r"\(([^)]+@[^)]+)\)", str(s))
-                        return (m.group(1) if m else str(s)).lower().strip()
-                    fid["_email"] = fid[col_contact].apply(_mail)
-                    pay_c["_email"] = pay_c["Customer Email"].astype(str).str.lower().str.strip()
-                    reembolsados = set(pay_c[pd.to_numeric(pay_c["Amount Refunded"], errors="coerce").fillna(0) > 0]["_email"])
-                    salv = fid[fid["_salvado"]].copy()
-                    salv["_contradice"] = salv["_email"].isin(reembolsados)
-                    contradictorios = salv[salv["_contradice"]]
 
             # ---------- Selector de mes ----------
             meses_disp = sorted(fid["_mes"].dropna().unique(), reverse=True)
@@ -493,12 +484,7 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
             else:
                 sub = fid
 
-            # excluir contradictorios del pago si existen
             excluir_contra = False
-            if not contradictorios.empty:
-                st.error(f"⚠️ **{len(contradictorios)} caso(s) contradictorio(s):** marcados como salvados pero "
-                         f"con reembolso en Stripe. Pagar comisión por ellos = pagar de más.")
-                excluir_contra = st.checkbox("Excluir casos contradictorios del cálculo de comisión", value=True)
 
             n_excluidos = int(sub["_salvado"].sum() - sub["_comisionable"].sum())
             if n_excluidos > 0 and "Estado del rescate" in sub.columns:
@@ -621,16 +607,22 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
             st.dataframe(piv, use_container_width=True)
             st.caption("Cada columna es un mes. La última columna muestra el cambio del mes más reciente vs. el anterior.")
 
-            # ---------- #4: lista de contradictorios ----------
-            if not contradictorios.empty:
+            # ---------- Casos excluidos del pago (auditados) ----------
+            excluidos = sub[sub["_salvado"] & ~sub["_comisionable"]]
+            if not excluidos.empty:
                 st.divider()
-                st.markdown("**Casos a revisar antes de pagar** (marcados salvados en HubSpot pero reembolsados en Stripe)")
-                cols_contra = [c for c in [col_agente, col_contact, col_reso, col_fecha] if c in contradictorios.columns]
-                st.dataframe(contradictorios[cols_contra], use_container_width=True, hide_index=True)
+                st.markdown("**Casos salvados que NO comisionan** (verificado cargo por cargo contra Stripe)")
+                cols_exc = [c for c in [col_agente, col_contact, col_reso, "Estado del rescate",
+                                        "Cargo salvado (fecha)", col_monto, col_fecha]
+                            if c in excluidos.columns]
+                tabla_exc = excluidos[cols_exc].rename(columns={
+                    col_agente: "Asesor", col_contact: "Cliente", col_fecha: "Cierre",
+                    col_monto: "Monto del cargo"})
+                st.dataframe(tabla_exc, use_container_width=True, hide_index=True)
                 bufc = io.StringIO()
-                contradictorios[cols_contra].to_csv(bufc, index=False)
-                st.download_button("⬇️ Descargar casos a revisar", bufc.getvalue(),
-                                   file_name="casos_contradictorios.csv", mime="text/csv")
+                tabla_exc.to_csv(bufc, index=False)
+                st.download_button("⬇️ Descargar casos excluidos", bufc.getvalue(),
+                                   file_name=f"casos_excluidos_{etiqueta}.csv", mime="text/csv")
 
             with st.expander("Verificar: resoluciones contadas como salvado"):
                 chk = sub.groupby(col_reso)["_salvado"].agg(["count", "first"]).reset_index()

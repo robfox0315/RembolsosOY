@@ -102,6 +102,12 @@ def hs_construir_tabla_agentes(token, year, month):
 
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Módulo de conexión al Data Warehouse de Treble (opcional; degrada si no está disponible)
+try:
+    import treble_dwh
+except Exception:
+    treble_dwh = None
 import io
 import re
 
@@ -343,6 +349,26 @@ with st.expander("Actualizar datos (solo para administradores)"):
             st.code("\n".join(sorted(p.name for p in carpeta_data.iterdir())) or "(vacía)")
         else:
             st.warning("La carpeta `data/` no existe en el repositorio.")
+
+    # Estado del Data Warehouse de Treble (conexión en vivo, opcional)
+    with st.expander("Conexión al Data Warehouse de Treble"):
+        if treble_dwh is None:
+            st.info("El módulo `treble_dwh.py` no está presente en el repositorio.")
+        elif not treble_dwh.dwh_disponible():
+            st.warning("Sin credenciales configuradas. Para activar la conexión en vivo, agrega en "
+                       "**Settings → Secrets**:")
+            st.code('[treble_dwh]\nhost = "eaoxkoa7g7.us-east-1.aws.clickhouse.cloud"\nport = 8443\n'
+                    'username = "opcionyo_readonly"\npassword = "TU_PASSWORD"\ndatabase = "client_analytics"',
+                    language="toml")
+        else:
+            if st.button("Probar conexión al Data Warehouse"):
+                ok, msg = treble_dwh.test_conexion()
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    tablas = treble_dwh.listar_tablas()
+                    if tablas is not None and not tablas.empty:
+                        st.write("**Tablas disponibles:**")
+                        st.dataframe(tablas, use_container_width=True, hide_index=True)
 
 df = st.session_state.payments_df.copy()
 

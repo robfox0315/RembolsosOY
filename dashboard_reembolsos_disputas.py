@@ -111,6 +111,13 @@ except Exception:
 import io
 import re
 
+def _secret_present(key):
+    """True si existe un secret con esa clave (sin exponer su valor)."""
+    try:
+        return key in st.secrets and bool(st.secrets[key])
+    except Exception:
+        return False
+
 MESES_ES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
             7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
 
@@ -389,6 +396,43 @@ df["is_refund"] = df["Amount Refunded"] > 0
 df["is_dispute"] = df["Dispute Status"].notna()
 
 # ------------------------------------------------------------------
+# BARRA DE ESTADO — frescura de datos y conexiones en vivo
+# ------------------------------------------------------------------
+_fechas_dato = pd.concat([
+    df["Created date (UTC)"], df["Refunded date (UTC)"], df["Dispute Date (UTC)"]
+]).dropna()
+_ult_dato = _fechas_dato.max() if not _fechas_dato.empty else None
+_hoy = pd.Timestamp.now().normalize()
+
+# Estado de conexiones
+_hs_ok = bool(_secret_present("HUBSPOT_TOKEN"))
+_dwh_ok = (treble_dwh is not None and treble_dwh.dwh_disponible())
+
+def _chip(ok, label):
+    color = GREEN if ok else SLATE
+    icono = "●" if ok else "○"
+    return f'<span style="color:{color};font-weight:600">{icono} {label}</span>'
+
+if _ult_dato is not None:
+    _dias = (_hoy - _ult_dato.normalize()).days
+    _frescura = "hoy" if _dias == 0 else ("ayer" if _dias == 1 else f"hace {_dias} días")
+    _fresh_color = GREEN if _dias <= 2 else (AMBER if _dias <= 7 else RED)
+    st.markdown(f"""
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;
+     background:{CARD};border:1px solid {LINE};border-radius:12px;padding:10px 18px;margin-bottom:14px;font-size:0.84rem">
+  <div style="color:{SLATE}">
+    Dato más reciente: <b style="color:{_fresh_color}">{_ult_dato.strftime('%d/%m/%Y')}</b>
+    <span style="color:{_fresh_color}">({_frescura})</span>
+  </div>
+  <div style="display:flex;gap:18px">
+    {_chip(True, "Stripe")}
+    {_chip(_hs_ok, "HubSpot API")}
+    {_chip(_dwh_ok, "Treble DWH")}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ------------------------------------------------------------------
 # SELECTOR DE PERIODO Y CRITERIO DE FECHA
 # ------------------------------------------------------------------
 all_months = sorted(set(
@@ -426,8 +470,8 @@ n_casos_totales = n_refunds + n_disputes
 # ------------------------------------------------------------------
 # TABS
 # ------------------------------------------------------------------
-tab1, tab2, tab3, tab6, tab7, tab4, tab5 = st.tabs([
-    "Resumen ejecutivo", "Reembolsos", "Disputas", "Rescate por agente", "Comisiones", "Pendientes urgentes", "Detalle de casos"
+tab1, tab2, tab3, tab6, tab7, tab_rep, tab4, tab5 = st.tabs([
+    "Resumen ejecutivo", "Reembolsos", "Disputas", "Rescate por agente", "Comisiones", "Reporte mensual", "Pendientes urgentes", "Detalle de casos"
 ])
 
 # ===================== TAB 7: COMISIONES POR CSV (sin token) =====================
@@ -1076,3 +1120,127 @@ with tab5:
     tabla.to_csv(buf, index=False)
     st.download_button("⬇️ Descargar CSV de este detalle", buf.getvalue(),
                         file_name=f"detalle_{tipo_caso.lower()}_{mes_sel}.csv", mime="text/csv")
+
+# ═══════════════════════════════════════════════════════════════════
+#  REPORTE MENSUAL (para Gonzalo) — reembolsos y disputas separados por
+#  si el pago original se hizo en el mes o en meses anteriores.
+# ═══════════════════════════════════════════════════════════════════
+with tab_rep:
+    st.subheader("Reporte mensual de reembolsos y disputas")
+    st.caption("Separa los casos según si el pago original se hizo en el mes analizado o en meses anteriores. "
+               "Un caso se asigna al mes en que ocurrió el reembolso o la disputa.")
+
+    FEE_DISPUTA = 15.0  # fee de Stripe por disputa
+
+    # Selector de mes propio del reporte (último mes completo por defecto)
+    meses_rep = sorted(set(
+        df["Refunded date (UTC)"].dropna().dt.to_period("M").astype(str).tolist() +
+        df["Dispute Date (UTC)"].dropna().dt.to_period("M").astype(str).tolist()
+    ), reverse=True)
+    _mes_hoy_rep = pd.Timestamp.now().to_period("M").strftime("%Y-%m")
+    _idx_rep = next((i for i, m in enumerate(meses_rep) if m != _mes_hoy_rep), 0)
+    mes_rep = st.selectbox("Mes del reporte", meses_rep, index=_idx_rep, key="mes_reporte")
+
+    per = pd.Period(mes_rep, freq="M")
+    ini, fin = per.start_time, (per + 1).start_time
+
+    # Reembolsos y disputas que OCURRIERON en el mes
+    ref_mes = df[(df["Refunded date (UTC)"] >= ini) & (df["Refunded date (UTC)"] < fin)].copy()
+    dis_mes = df[(df["Dispute Date (UTC)"] >= ini) & (df["Dispute Date (UTC)"] < fin)].copy()
+
+    # Separar por mes del pago original (Created date)
+    ref_pago_mes = ref_mes[(ref_mes["Created date (UTC)"] >= ini) & (ref_mes["Created date (UTC)"] < fin)]
+    ref_pago_ant = ref_mes[ref_mes["Created date (UTC)"] < ini]
+    dis_pago_mes = dis_mes[(dis_mes["Created date (UTC)"] >= ini) & (dis_mes["Created date (UTC)"] < fin)]
+    dis_pago_ant = dis_mes[dis_mes["Created date (UTC)"] < ini]
+
+    # Montos
+    def _mto(d, col): return float(d[col].sum())
+    ref_ant_m = _mto(ref_pago_ant, "Amount Refunded")
+    ref_mes_m = _mto(ref_pago_mes, "Amount Refunded")
+    dis_ant_m = _mto(dis_pago_ant, "Disputed Amount")
+    dis_mes_m = _mto(dis_pago_mes, "Disputed Amount")
+    dis_ant_fee = len(dis_pago_ant) * FEE_DISPUTA
+    dis_mes_fee = len(dis_pago_mes) * FEE_DISPUTA
+
+    # Totales
+    n_ref = len(ref_mes); n_dis = len(dis_mes)
+    ref_total = ref_ant_m + ref_mes_m
+    dis_total = dis_ant_m + dis_mes_m
+    fee_total = dis_ant_fee + dis_mes_fee
+    gran_total = ref_total + dis_total + fee_total
+
+    # ---- KPIs de encabezado ----
+    st.markdown(f"### {mes_es(per)}")
+    kA, kB, kC, kD = st.columns(4)
+    kA.metric("Casos totales", n_ref + n_dis)
+    kB.metric("Reembolsos", f"${ref_total:,.2f}", f"{n_ref} casos")
+    kC.metric("Disputas (+ fee)", f"${dis_total + fee_total:,.2f}", f"{n_dis} casos")
+    kD.metric("Total en riesgo", f"${gran_total:,.2f}")
+
+    st.divider()
+
+    # ---- Bloque A: pagos de meses anteriores ----
+    st.markdown("#### Reembolsos y disputas por pagos de meses anteriores")
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Casos", len(ref_pago_ant) + len(dis_pago_ant))
+    a2.metric("Reembolsos", f"${ref_ant_m:,.2f}", f"{len(ref_pago_ant)} casos")
+    a3.metric("Disputas + fee", f"${dis_ant_m + dis_ant_fee:,.2f}",
+              f"{len(dis_pago_ant)} casos (${dis_ant_m:,.0f} + ${dis_ant_fee:,.0f} fee)")
+
+    st.divider()
+
+    # ---- Bloque B: pagos del mes ----
+    st.markdown(f"#### Reembolsos y disputas por pagos hechos en {mes_es(per)}")
+    b1, b2, b3 = st.columns(3)
+    b1.metric("Casos", len(ref_pago_mes) + len(dis_pago_mes))
+    b2.metric("Reembolsos", f"${ref_mes_m:,.2f}", f"{len(ref_pago_mes)} casos")
+    b3.metric("Disputas + fee", f"${dis_mes_m + dis_mes_fee:,.2f}",
+              f"{len(dis_pago_mes)} casos (${dis_mes_m:,.0f} + ${dis_mes_fee:,.0f} fee)")
+
+    st.divider()
+
+    # ---- Tabla resumen consolidada ----
+    st.markdown("#### Resumen consolidado")
+    resumen = pd.DataFrame([
+        {"Concepto": "Reembolsos — pagos de meses anteriores", "Casos": len(ref_pago_ant), "Monto": ref_ant_m, "Fee": 0.0},
+        {"Concepto": "Reembolsos — pagos del mes",            "Casos": len(ref_pago_mes), "Monto": ref_mes_m, "Fee": 0.0},
+        {"Concepto": "Disputas — pagos de meses anteriores",  "Casos": len(dis_pago_ant), "Monto": dis_ant_m, "Fee": dis_ant_fee},
+        {"Concepto": "Disputas — pagos del mes",              "Casos": len(dis_pago_mes), "Monto": dis_mes_m, "Fee": dis_mes_fee},
+    ])
+    resumen["Total"] = resumen["Monto"] + resumen["Fee"]
+    fila_total = pd.DataFrame([{"Concepto": "TOTAL", "Casos": int(resumen["Casos"].sum()),
+                                "Monto": resumen["Monto"].sum(), "Fee": resumen["Fee"].sum(),
+                                "Total": resumen["Total"].sum()}])
+    resumen_show = pd.concat([resumen, fila_total], ignore_index=True)
+    for c in ["Monto", "Fee", "Total"]:
+        resumen_show[c] = resumen_show[c].apply(lambda x: f"${x:,.2f}")
+    st.dataframe(resumen_show, use_container_width=True, hide_index=True)
+
+    # ---- Descarga del reporte ----
+    buf_rep = io.StringIO()
+    resumen.assign(
+        Concepto=resumen["Concepto"], Casos=resumen["Casos"],
+        Monto=resumen["Monto"].round(2), Fee=resumen["Fee"].round(2),
+        Total=resumen["Total"].round(2)
+    ).to_csv(buf_rep, index=False)
+    st.download_button(f"⬇️ Descargar reporte {mes_es(per)} (CSV)", buf_rep.getvalue(),
+                       file_name=f"reporte_reembolsos_disputas_{mes_rep}.csv", mime="text/csv")
+
+    # ---- Texto listo para copiar/pegar (formato de Gonzalo) ----
+    with st.expander("Ver texto del reporte (listo para copiar)"):
+        texto = f"""REEMBOLSOS Y DISPUTAS — {mes_es(per).upper()}
+
+Por pagos NO hechos en {mes_es(per)} (meses anteriores): {len(ref_pago_ant) + len(dis_pago_ant)} casos
+  Reembolsos: {len(ref_pago_ant)} · ${ref_ant_m:,.2f}
+  Disputas: {len(dis_pago_ant)} · ${dis_ant_m:,.2f} + ${dis_ant_fee:,.2f} fee = ${dis_ant_m + dis_ant_fee:,.2f}
+
+Por pagos hechos en {mes_es(per)}: {len(ref_pago_mes) + len(dis_pago_mes)} casos
+  Reembolsos: {len(ref_pago_mes)} · ${ref_mes_m:,.2f}
+  Disputas: {len(dis_pago_mes)} · ${dis_mes_m:,.2f} + ${dis_mes_fee:,.2f} fee = ${dis_mes_m + dis_mes_fee:,.2f}
+
+TOTALES:
+  Reembolsos: {n_ref} casos · ${ref_total:,.2f}
+  Disputas: {n_dis} casos · ${dis_total:,.2f} + ${fee_total:,.2f} fee = ${dis_total + fee_total:,.2f}
+  SUMA TOTAL: ${gran_total:,.2f} ({n_ref + n_dis} casos)"""
+        st.code(texto, language=None)

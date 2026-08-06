@@ -470,8 +470,8 @@ n_casos_totales = n_refunds + n_disputes
 # ------------------------------------------------------------------
 # TABS
 # ------------------------------------------------------------------
-tab1, tab2, tab3, tab6, tab7, tab_rep, tab4, tab5 = st.tabs([
-    "Resumen ejecutivo", "Reembolsos", "Disputas", "Rescate por agente", "Comisiones", "Reporte mensual", "Pendientes urgentes", "Detalle de casos"
+tab1, tab2, tab3, tab6, tab7, tab_rep, tab4, tab5, tab_doc = st.tabs([
+    "Resumen ejecutivo", "Reembolsos", "Disputas", "Rescate por agente", "Comisiones", "Reporte mensual", "Pendientes urgentes", "Detalle de casos", "Documentos"
 ])
 
 # ===================== TAB 7: COMISIONES POR CSV (sin token) =====================
@@ -864,12 +864,41 @@ with tab6:
 with tab1:
     st.subheader(f"Resumen — {mes_es(period)}")
 
+    # ---- ALERTA: disputas que necesitan respuesta antes de que venza el plazo ----
+    if "Dispute Evidence Due (UTC)" in df.columns:
+        _pend = df[df["Dispute Status"].isin(["needs_response", "warning_needs_response"])].copy()
+        if not _pend.empty:
+            _pend["_due"] = pd.to_datetime(_pend["Dispute Evidence Due (UTC)"], errors="coerce")
+            _pend["_dias"] = (_pend["_due"] - pd.Timestamp.now()).dt.days
+            _urg = _pend[_pend["_dias"] <= 5]
+            _venc = _pend[_pend["_dias"] < 0]
+            _monto_urg = pd.to_numeric(_urg["Disputed Amount"], errors="coerce").fillna(0).sum()
+            if not _urg.empty:
+                msg = (f"**{len(_urg)} disputa(s) necesitan respuesta en 5 días o menos** — "
+                       f"${_monto_urg:,.2f} en riesgo.")
+                if not _venc.empty:
+                    msg += f" De ellas, **{len(_venc)} ya pasaron el plazo**."
+                msg += " Sin respuesta a tiempo, el banco falla a favor del cliente automáticamente."
+                st.error("🚨 " + msg)
+
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Casos totales", n_casos_totales)
     k2.metric("Reembolsos", n_refunds, f"${monto_refunds:,.2f}")
     k3.metric("Disputas", n_disputes, f"${total_disputas:,.2f}")
     k4.metric("Monto total (reembolsos + disputas)", f"${gran_total:,.2f}")
     st.caption("Monto de disputas incluye fee de disputa Stripe ($15 por caso) sobre `Disputed Amount` + `Fee`.")
+
+    # ---- Salud del negocio: tasa de reembolso sobre ventas + tendencia ----
+    st.divider()
+    st.markdown("**Salud del negocio**")
+    hc1, hc2, hc3 = st.columns(3)
+    # Tasa de reembolso sobre ventas del mes
+    _ventas_mes = df[(df["Created date (UTC)"] >= p_start) & (df["Created date (UTC)"] < p_end) & (df["Status"] == "Paid")]
+    _tasa_ref = (n_refunds / len(_ventas_mes) * 100) if len(_ventas_mes) else 0
+    hc1.metric("Tasa de reembolso", f"{_tasa_ref:.1f}%",
+               help="Reembolsos del mes ÷ ventas exitosas del mes. Referencia sana: por debajo de 3%.")
+    hc2.metric("Ventas exitosas del mes", f"{len(_ventas_mes):,}")
+    hc3.metric("Ticket promedio reembolso", f"${monto_refunds / n_refunds:,.2f}" if n_refunds else "$0")
 
     st.divider()
 
@@ -913,6 +942,37 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Fuente: conteo diario por `Refunded date (UTC)` y `Dispute Date (UTC)`.")
 
+    # ---- Tendencia de los últimos 6 meses (dirección del problema) ----
+    st.divider()
+    st.markdown("**Tendencia — últimos 6 meses**")
+    st.caption("Muestra si el monto de reembolsos y disputas crece o baja en el tiempo, no solo el mes actual.")
+    _hist = df.copy()
+    _hist["mes_ref"] = _hist["Refunded date (UTC)"].dt.to_period("M")
+    _hist["mes_dis"] = _hist["Dispute Date (UTC)"].dt.to_period("M")
+    _ult6 = pd.period_range(end=period, periods=6, freq="M")
+    filas = []
+    for m in _ult6:
+        r = _hist[_hist["mes_ref"] == m]["Amount Refunded"].sum()
+        d_sub = _hist[_hist["mes_dis"] == m]
+        d = d_sub["Disputed Amount"].sum() + len(d_sub) * 15.0
+        filas.append({"Mes": mes_es(m), "Reembolsos": round(r, 2), "Disputas": round(d, 2)})
+    tend = pd.DataFrame(filas)
+    figt = go.Figure()
+    figt.add_bar(x=tend["Mes"], y=tend["Reembolsos"], name="Reembolsos", marker_color=TEAL)
+    figt.add_bar(x=tend["Mes"], y=tend["Disputas"], name="Disputas (+ fee)", marker_color=RED)
+    figt.update_layout(**PLOTLY_LAYOUT, height=340, barmode="group", yaxis_title="USD")
+    st.plotly_chart(figt, use_container_width=True)
+    # Variación vs mes anterior
+    if len(tend) >= 2:
+        _act = tend.iloc[-1]["Reembolsos"] + tend.iloc[-1]["Disputas"]
+        _prev = tend.iloc[-2]["Reembolsos"] + tend.iloc[-2]["Disputas"]
+        if _prev > 0:
+            _var = (_act - _prev) / _prev * 100
+            _dir = "subió" if _var > 0 else "bajó"
+            _col = RED if _var > 0 else GREEN
+            st.markdown(f"El total en riesgo <b style='color:{_col}'>{_dir} {abs(_var):.0f}%</b> "
+                        f"respecto al mes anterior (${_prev:,.0f} → ${_act:,.0f}).", unsafe_allow_html=True)
+
 # ===================== TAB 2: REEMBOLSOS =====================
 with tab2:
     st.subheader("Reembolsos del mes")
@@ -947,6 +1007,28 @@ with tab2:
     fig.update_layout(**PLOTLY_LAYOUT, height=350, yaxis_title="Monto USD ($)")
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Fuente: prefijo de `Description` (Invoice / Subscription creation / Subscription update).")
+
+    # ---- Clientes reincidentes (señal de abuso o problema de producto) ----
+    st.divider()
+    st.markdown("**Clientes con reembolsos repetidos (histórico completo)**")
+    st.caption("Un cliente que pide reembolso varias veces puede indicar abuso, insatisfacción recurrente "
+               "o un problema de producto. Vale la pena revisarlos.")
+    _ref_all = df[df["Amount Refunded"] > 0].copy()
+    _reinc = _ref_all.groupby("Customer Email").agg(
+        Reembolsos=("id", "count"),
+        Monto=("Amount Refunded", "sum")
+    ).reset_index()
+    _reinc = _reinc[_reinc["Reembolsos"] >= 2].sort_values("Reembolsos", ascending=False)
+    if _reinc.empty:
+        st.info("No hay clientes con reembolsos repetidos en los datos cargados.")
+    else:
+        c_ri1, c_ri2 = st.columns([1, 3])
+        c_ri1.metric("Clientes reincidentes", len(_reinc))
+        c_ri1.metric("Monto acumulado", f"${_reinc['Monto'].sum():,.2f}")
+        _show_ri = _reinc.head(15).copy()
+        _show_ri["Monto"] = _show_ri["Monto"].apply(lambda x: f"${x:,.2f}")
+        c_ri2.dataframe(_show_ri.rename(columns={"Customer Email": "Cliente"}),
+                        use_container_width=True, hide_index=True)
 
     st.markdown("**Clientes con más de 1 reembolso en el mes**")
     top_all = refunds_m.groupby("Customer Email").agg(casos=("id", "count"), monto=("Amount Refunded", "sum")).reset_index()
@@ -1244,3 +1326,48 @@ TOTALES:
   Disputas: {n_dis} casos · ${dis_total:,.2f} + ${fee_total:,.2f} fee = ${dis_total + fee_total:,.2f}
   SUMA TOTAL: ${gran_total:,.2f} ({n_ref + n_dis} casos)"""
         st.code(texto, language=None)
+
+# ═══════════════════════════════════════════════════════════════════
+#  DOCUMENTOS — informes de auditoría embebidos, listos para descargar
+# ═══════════════════════════════════════════════════════════════════
+with tab_doc:
+    st.subheader("Documentos e informes")
+    st.caption("Informes de auditoría y certificación, listos para descargar. Se cargan automáticamente "
+               "desde el repositorio; no requieren ninguna acción.")
+
+    _docs = [
+        ("Certificacion_Comisiones_Mayo2026.docx",
+         "Certificación de Comisiones — Mayo 2026",
+         "Auditoría del 100% de los casos. Dictamen: 25 casos comisionables · $3,907.00, verificados cargo por cargo contra Stripe."),
+        ("Auditoria_Rescates_Mayo2026.docx",
+         "Auditoría de Rescates — Mayo 2026",
+         "Muestra auditada de casos con la cadena de evidencia ticket → cliente → cargo en Stripe."),
+        ("Instructivo_Monto_Rescate_Angela.docx",
+         "Propuesta — Registro de monto en tickets de rescate",
+         "Propuesta de mejora de proceso para hacer obligatorio el campo de monto al cerrar tickets."),
+    ]
+
+    _docs_dir = None
+    for _cand in [BASE_DIR / "docs", BASE_DIR, Path("docs"), Path(".")]:
+        if _cand.exists() and any((_cand / d[0]).exists() for d in _docs):
+            _docs_dir = _cand
+            break
+
+    if _docs_dir is None:
+        st.info("Los documentos aún no están disponibles en el repositorio. "
+                "Súbelos a la carpeta `docs/` para que aparezcan aquí.")
+    else:
+        for _fname, _titulo, _desc in _docs:
+            _ruta = _docs_dir / _fname
+            if _ruta.exists():
+                with st.container():
+                    cD1, cD2 = st.columns([4, 1])
+                    with cD1:
+                        st.markdown(f"**{_titulo}**")
+                        st.caption(_desc)
+                    with cD2:
+                        with open(_ruta, "rb") as _f:
+                            st.download_button("⬇️ Descargar", _f.read(), file_name=_fname,
+                                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                               key=f"dl_{_fname}")
+                    st.divider()

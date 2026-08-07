@@ -695,14 +695,16 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
             # ---------- Desglose por cliente dentro de cada agente ----------
             st.divider()
             st.markdown("**Detalle por cliente (por agente)**")
-            st.caption("Cada caso salvado por el asesor. Se separan los que **comisionan** de los que **no comisionan** "
-                       "(disputas gestionadas por Admin o rescates que terminaron reembolsados), como respaldo de auditoría.")
+            st.caption("Todos los casos que gestionó cada asesor, para cruzar información: los que **salvó y comisionan**, "
+                       "los que **salvó pero no comisionan** (disputa o rescate no sostenido), y los que **terminaron "
+                       "reembolsados** (el cliente sí recibió su dinero).")
 
-            salvados_det = sub[sub["_salvado"]].copy()
+            # Todos los casos del periodo (salvados y no salvados)
+            todos_det = sub.copy()
 
             cols_det = [c for c in [col_contact, col_reso, col_monto, "Estado del rescate", "Cargo salvado (fecha)",
                                     "Estado de disputa", col_fecha]
-                        if c in salvados_det.columns]
+                        if c in todos_det.columns]
             agentes_orden = g.sort_values("Comisionables", ascending=False)["Agente"].tolist()
             rename_map = {col_contact: "Cliente", col_reso: "Resolución",
                           col_monto: "Monto", col_fecha: "Fecha de cierre"}
@@ -714,22 +716,25 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
                 return t
 
             for ag in agentes_orden:
-                filas_ag = salvados_det[salvados_det["_agente"] == ag]
+                filas_ag = todos_det[todos_det["_agente"] == ag]
                 if filas_ag.empty:
                     continue
                 comis_ag = filas_ag[filas_ag["_comisionable"]]
-                nocom_ag = filas_ag[~filas_ag["_comisionable"]]
+                salv_nocom = filas_ag[filas_ag["_salvado"] & ~filas_ag["_comisionable"]]
+                no_salv = filas_ag[~filas_ag["_salvado"]]
                 monto_ag = comis_ag["_monto"].sum()
-                titulo = f"{ag} · {len(comis_ag)} comisionables · ${monto_ag:,.2f}"
-                if not nocom_ag.empty:
-                    titulo += f"  (+{len(nocom_ag)} no comisionan)"
+
+                titulo = f"{ag} · {len(filas_ag)} gestionados · {len(comis_ag)} comisionables · ${monto_ag:,.2f}"
                 with st.expander(titulo):
                     if not comis_ag.empty:
-                        st.markdown("**Comisionables** — generan pago")
+                        st.markdown("**✓ Comisionables** — salvó y genera pago")
                         st.dataframe(_fmt_tabla(comis_ag), use_container_width=True, hide_index=True)
-                    if not nocom_ag.empty:
-                        st.markdown("**No comisionan** — respaldo (disputa o rescate no sostenido)")
-                        st.dataframe(_fmt_tabla(nocom_ag), use_container_width=True, hide_index=True)
+                    if not salv_nocom.empty:
+                        st.markdown("**⚠ Salvados que no comisionan** — disputa o rescate no sostenido")
+                        st.dataframe(_fmt_tabla(salv_nocom), use_container_width=True, hide_index=True)
+                    if not no_salv.empty:
+                        st.markdown("**✗ Reembolso concedido** — el cliente sí recibió su dinero (no salvado)")
+                        st.dataframe(_fmt_tabla(no_salv), use_container_width=True, hide_index=True)
 
             # ---------- #1: comparativa mes vs mes ----------
             st.divider()

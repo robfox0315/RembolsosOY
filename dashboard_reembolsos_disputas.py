@@ -694,37 +694,42 @@ Fecha de cierre, Monto de reembolso y Associated Contact.
 
             # ---------- Desglose por cliente dentro de cada agente ----------
             st.divider()
-            st.markdown("**Detalle por cliente recuperado (por agente)**")
-            st.caption("Cada cliente cuyo reembolso fue salvado. Los casos marcados 'Fue a disputa = Sí' "
-                       "**no generan comisión** (los gestiona Admin), pero se muestran para trazabilidad.")
+            st.markdown("**Detalle por cliente (por agente)**")
+            st.caption("Cada caso salvado por el asesor. Se separan los que **comisionan** de los que **no comisionan** "
+                       "(disputas gestionadas por Admin o rescates que terminaron reembolsados), como respaldo de auditoría.")
 
             salvados_det = sub[sub["_salvado"]].copy()
-            if excluir_contra and not contradictorios.empty:
-                salvados_det = salvados_det[~salvados_det.index.isin(contradictorios.index)]
 
             cols_det = [c for c in [col_contact, col_reso, col_monto, "Estado del rescate", "Cargo salvado (fecha)",
                                     "Estado de disputa", col_fecha]
                         if c in salvados_det.columns]
             agentes_orden = g.sort_values("Comisionables", ascending=False)["Agente"].tolist()
+            rename_map = {col_contact: "Cliente", col_reso: "Resolución",
+                          col_monto: "Monto", col_fecha: "Fecha de cierre"}
+
+            def _fmt_tabla(dfx):
+                t = dfx[cols_det].rename(columns=rename_map).copy()
+                if "Monto" in t.columns:
+                    t["Monto"] = pd.to_numeric(t["Monto"], errors="coerce").fillna(0).apply(lambda x: f"${x:,.2f}")
+                return t
 
             for ag in agentes_orden:
                 filas_ag = salvados_det[salvados_det["_agente"] == ag]
                 if filas_ag.empty:
                     continue
                 comis_ag = filas_ag[filas_ag["_comisionable"]]
+                nocom_ag = filas_ag[~filas_ag["_comisionable"]]
                 monto_ag = comis_ag["_monto"].sum()
-                n_disp_ag = int((~filas_ag["_comisionable"]).sum())
                 titulo = f"{ag} · {len(comis_ag)} comisionables · ${monto_ag:,.2f}"
-                if n_disp_ag:
-                    titulo += f"  (+{n_disp_ag} no comisionan)"
+                if not nocom_ag.empty:
+                    titulo += f"  (+{len(nocom_ag)} no comisionan)"
                 with st.expander(titulo):
-                    tabla_det = filas_ag[cols_det].copy()
-                    rename_map = {col_contact: "Cliente", col_reso: "Resolución",
-                                  col_monto: "Monto recuperado", col_fecha: "Fecha de cierre"}
-                    tabla_det = tabla_det.rename(columns=rename_map)
-                    if "Monto recuperado" in tabla_det.columns:
-                        tabla_det["Monto recuperado"] = pd.to_numeric(tabla_det["Monto recuperado"], errors="coerce").fillna(0).apply(lambda x: f"${x:,.2f}")
-                    st.dataframe(tabla_det, use_container_width=True, hide_index=True)
+                    if not comis_ag.empty:
+                        st.markdown("**Comisionables** — generan pago")
+                        st.dataframe(_fmt_tabla(comis_ag), use_container_width=True, hide_index=True)
+                    if not nocom_ag.empty:
+                        st.markdown("**No comisionan** — respaldo (disputa o rescate no sostenido)")
+                        st.dataframe(_fmt_tabla(nocom_ag), use_container_width=True, hide_index=True)
 
             # ---------- #1: comparativa mes vs mes ----------
             st.divider()
@@ -863,23 +868,6 @@ with tab6:
 # ===================== TAB 1: RESUMEN =====================
 with tab1:
     st.subheader(f"Resumen — {mes_es(period)}")
-
-    # ---- ALERTA: disputas que necesitan respuesta antes de que venza el plazo ----
-    if "Dispute Evidence Due (UTC)" in df.columns:
-        _pend = df[df["Dispute Status"].isin(["needs_response", "warning_needs_response"])].copy()
-        if not _pend.empty:
-            _pend["_due"] = pd.to_datetime(_pend["Dispute Evidence Due (UTC)"], errors="coerce")
-            _pend["_dias"] = (_pend["_due"] - pd.Timestamp.now()).dt.days
-            _urg = _pend[_pend["_dias"] <= 5]
-            _venc = _pend[_pend["_dias"] < 0]
-            _monto_urg = pd.to_numeric(_urg["Disputed Amount"], errors="coerce").fillna(0).sum()
-            if not _urg.empty:
-                msg = (f"**{len(_urg)} disputa(s) necesitan respuesta en 5 días o menos** — "
-                       f"${_monto_urg:,.2f} en riesgo.")
-                if not _venc.empty:
-                    msg += f" De ellas, **{len(_venc)} ya pasaron el plazo**."
-                msg += " Sin respuesta a tiempo, el banco falla a favor del cliente automáticamente."
-                st.error("🚨 " + msg)
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Casos totales", n_casos_totales)
